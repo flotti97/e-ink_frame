@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/flotti97/e-ink_frame/slide"
@@ -173,6 +174,111 @@ func TestAddRejectsOtherFormatsAndLeavesNoTrace(t *testing.T) {
 	for _, sub := range []string{"images", "slides"} {
 		if files, _ := os.ReadDir(lib.dir + "/" + sub); len(files) != 0 {
 			t.Errorf("%s/ has leftovers: %v", sub, files)
+		}
+	}
+}
+
+func TestListSkipsCorruptEntries(t *testing.T) {
+	lib := open(t)
+	good, _ := lib.Add("good.png", bytes.NewReader(pngBytes(t, 60)))
+	if err := os.WriteFile(lib.entryPath("bad0000000000000"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := lib.List()
+	if err != nil {
+		t.Fatalf("one corrupt entry broke List: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != good.ID {
+		t.Errorf("list is %v, want only %s", list, good.ID)
+	}
+}
+
+func TestOpenRemovesOrphanedFiles(t *testing.T) {
+	lib := open(t)
+	good, _ := lib.Add("good.png", bytes.NewReader(pngBytes(t, 60)))
+	orphans := []string{
+		lib.SlidePath("orphan0000000000"),                        // Add crashed after the Slide
+		lib.ImagePath(Entry{ID: "orphan0000000000", Ext: "jpg"}), // ... or after the Image
+		lib.SlidePath(good.ID) + ".123.tmp",                      // a write that never finished
+	}
+	for _, p := range orphans {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := Open(lib.dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range orphans {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("orphan %s survived Open", p)
+		}
+	}
+	for _, p := range []string{lib.ImagePath(good), lib.SlidePath(good.ID), lib.entryPath(good.ID)} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("Open removed a stored file: %v", err)
+		}
+	}
+}
+
+func TestConcurrentUse(t *testing.T) {
+	lib := open(t)
+	const n = 6
+	var wg sync.WaitGroup
+	ids := make(chan string, n)
+	for i := 0; i < n; i++ {
+		data := pngBytes(t, uint8(20+i*30))
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			e, err := lib.Add("x.png", bytes.NewReader(data))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			ids <- e.ID
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := lib.List(); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(ids)
+
+	// Delete half while listing and re-adding the same bytes concurrently.
+	var all []string
+	for id := range ids {
+		all = append(all, id)
+	}
+	for _, id := range all[:n/2] {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := lib.Delete(id); err != nil {
+				t.Error(err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := lib.List(); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	list, _ := lib.List()
+	if len(list) != n-n/2 {
+		t.Errorf("listed %d Images, want %d", len(list), n-n/2)
+	}
+	for _, e := range list {
+		if _, err := os.Stat(lib.SlidePath(e.ID)); err != nil {
+			t.Errorf("listed Image %s has no Slide", e.ID)
 		}
 	}
 }

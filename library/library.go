@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/flotti97/e-ink_frame/slide"
@@ -38,19 +40,80 @@ type Entry struct {
 	Added time.Time `json:"added"`
 }
 
-// Library is a directory of Images and their Slides.
+// Library is a directory of Images and their Slides. It is safe for
+// concurrent use, also from several processes sharing the directory.
 type Library struct {
 	dir string
+	mu  sync.Mutex // serialises goroutines; lock serialises processes
 }
 
-// Open uses dir as a Library, creating it if needed.
+// Open uses dir as a Library, creating it if needed, and removes files left
+// behind by an Add or write that never finished.
 func Open(dir string) (*Library, error) {
 	for _, sub := range []string{"images", "slides"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return nil, err
 		}
 	}
-	return &Library{dir: dir}, nil
+	l := &Library{dir: dir}
+	unlock, err := l.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if err := l.removeOrphans(); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+// lock takes the Library for exclusive use, within this process and across
+// processes, until the returned func is called.
+func (l *Library) lock() (unlock func(), err error) {
+	l.mu.Lock()
+	f, err := os.OpenFile(filepath.Join(l.dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err == nil {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+		if err != nil {
+			f.Close()
+		}
+	}
+	if err != nil {
+		l.mu.Unlock()
+		return nil, err
+	}
+	return func() {
+		f.Close() // releases the flock
+		l.mu.Unlock()
+	}, nil
+}
+
+// removeOrphans deletes temporary files, and Images and Slides that have no
+// Entry. The Entry is written last on Add and removed first on Delete, so a
+// file without one belongs to an operation that was cut short.
+func (l *Library) removeOrphans() error {
+	for _, sub := range []string{"images", "slides"} {
+		files, err := os.ReadDir(filepath.Join(l.dir, sub))
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			name := f.Name()
+			if !strings.HasSuffix(name, ".tmp") {
+				if strings.HasSuffix(name, ".json") {
+					continue
+				}
+				id, _, _ := strings.Cut(name, ".")
+				if _, err := os.Stat(l.entryPath(id)); err == nil {
+					continue
+				}
+			}
+			if err := os.Remove(filepath.Join(l.dir, sub, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // ImagePath is where the Image of e is kept, unchanged.
@@ -82,19 +145,27 @@ func (l *Library) Add(name string, r io.Reader) (Entry, error) {
 
 	sum := sha256.Sum256(data)
 	id := hex.EncodeToString(sum[:8])
-	if e, err := l.get(id); err == nil {
-		return e, nil
-	}
-
-	e := Entry{ID: id, Name: name, Ext: "png", Added: time.Now().UTC()}
+	ext := "png"
 	if http.DetectContentType(data) == "image/jpeg" {
-		e.Ext = "jpg"
+		ext = "jpg"
 	}
 
+	// Rendering is slow, so it happens before taking the lock.
 	var s bytes.Buffer
 	if err := png.Encode(&s, slide.Render(img)); err != nil {
 		return Entry{}, fmt.Errorf("%s: %w", name, err)
 	}
+
+	unlock, err := l.lock()
+	if err != nil {
+		return Entry{}, err
+	}
+	defer unlock()
+
+	if e, err := l.get(id); err == nil {
+		return e, nil
+	}
+	e := Entry{ID: id, Name: name, Ext: ext, Added: time.Now().UTC()}
 	meta, err := json.Marshal(e)
 	if err != nil {
 		return Entry{}, err
@@ -115,8 +186,15 @@ func (l *Library) Add(name string, r io.Reader) (Entry, error) {
 	return e, nil
 }
 
-// List returns every stored Image, oldest first.
+// List returns every stored Image, oldest first. Entries that can't be read
+// are left out rather than failing the whole listing.
 func (l *Library) List() ([]Entry, error) {
+	unlock, err := l.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	files, err := filepath.Glob(filepath.Join(l.dir, "images", "*.json"))
 	if err != nil {
 		return nil, err
@@ -125,7 +203,7 @@ func (l *Library) List() ([]Entry, error) {
 	for _, f := range files {
 		e, err := l.get(strings.TrimSuffix(filepath.Base(f), ".json"))
 		if err != nil {
-			return nil, err
+			continue
 		}
 		entries = append(entries, e)
 	}
@@ -135,6 +213,12 @@ func (l *Library) List() ([]Entry, error) {
 
 // Delete removes the Image with this ID and its Slide.
 func (l *Library) Delete(id string) error {
+	unlock, err := l.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	e, err := l.get(id)
 	if err != nil {
 		return err
