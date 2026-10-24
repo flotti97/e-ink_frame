@@ -2,7 +2,7 @@
 
 A picture frame that slowly rotates through your photos on a 10.3" e-paper panel. No backlight, no glare, and the last picture stays on screen even without power.
 
-> **Status:** early development. The Slide preview, the Image library, the Slideshow (on a fake panel) and the upload page with "show now" exist so far.
+> **Status:** early development. The Slide preview, the Image library, the Slideshow (on a fake panel), the upload page with "show now" and a one-Slide command for the real panel exist so far.
 
 ## Hardware
 
@@ -62,6 +62,15 @@ The terms **Frame**, **Image**, **Slide**, **Slideshow** and **Refresh** are def
   ```
 
   The shuffle is saved in `state` after every Slide, so a restart carries on with the same round.
+- Put one Slide (a Slide PNG, such as one from `data/slides`) or a test card on the real panel, on the Pi. Pass the VCOM from the panel's flex cable:
+
+  ```bash
+  GOOS=linux GOARCH=arm GOARM=6 go build ./cmd/panel
+  scp panel pi@<pi-address>:
+  ssh pi@<pi-address> ./panel -vcom -1.58 -test-card
+  ```
+
+  The test card has 16 gray bars running from black on the left to white, above thin lines and a diagonal that show whether the pixel order is right.
 - Run the tests with `go test ./...`.
 - Deploy by copying the binary to the Pi and restarting the service.
 
@@ -74,6 +83,16 @@ From the Waveshare wiki:
 - Set the DIP switch on the driver board to match the interface (SPI).
 - Operating range is 0–50 °C, and the panel can't update in direct sunlight.
 - Refresh at least every 24 hours to avoid burn-in.
+
+What we found driving the IT8951 (`it8951/`) from Linux:
+
+- Wiring: CS is CE0 (`/dev/spidev0.0`, toggled by the kernel), reset is GPIO 17 and HRDY is GPIO 24, both through sysfs. The `pi` user needs to be in the `spi` and `gpio` groups.
+- spidev caps a transaction at `bufsiz` (4096 bytes by default). Pixel data goes out as many write-data transactions; the controller keeps loading the image across them until "load image end".
+- The device-info command returns 20 words. Read them all, or the controller holds HRDY low and the next command times out.
+- Writes run at 8 MHz, reads at 2 MHz.
+- In 4 bpp mode each 16-bit word holds 4 pixels as the vendor demo packs them: pixels p0..p3 go out as the bytes `p2p3 p0p1`.
+- In the landscape frame the panel scans upside down: rows must be sent bottom-up. The controller's rotate setting can't fix this, because it rotates but doesn't flip.
+- A full GC16 Refresh of a whole Slide, including the transfer, takes about 5 s on a Pi Zero W.
 
 ## Project docs
 
