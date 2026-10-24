@@ -24,7 +24,7 @@ func mustParse(data string) map[rune]glyph {
 const (
 	scale    = 4.0 // pixels per font unit
 	penWidth = 7   // pixels
-	stepLen  = 60  // pixels of pen travel per animation step
+	stepLen  = 20  // pixels of pen travel per animation step
 	edge     = 48  // between text and Slide edge, pixels
 )
 
