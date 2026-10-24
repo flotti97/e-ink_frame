@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"image"
+	"image/draw"
 	"image/png"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flotti97/e-ink_frame/clock"
 	"github.com/flotti97/e-ink_frame/library"
 	"github.com/flotti97/e-ink_frame/slide"
 )
@@ -40,11 +42,20 @@ func TestFakePanelWritesTheSlideAsPNG(t *testing.T) {
 	}
 }
 
-// recordingPanel remembers which Slide it was shown by its first pixel.
-type recordingPanel struct{ shown []uint8 }
+// recordingPanel remembers which Slide it was shown by its first pixel,
+// and the areas of partial Refreshes.
+type recordingPanel struct {
+	shown   []uint8
+	updates []image.Rectangle
+}
 
 func (p *recordingPanel) Show(s *image.Gray) error {
 	p.shown = append(p.shown, s.Pix[0])
+	return nil
+}
+
+func (p *recordingPanel) Update(_ *image.Gray, r image.Rectangle) error {
+	p.updates = append(p.updates, r)
 	return nil
 }
 
@@ -301,6 +312,8 @@ func (p *blockingPanel) Show(*image.Gray) error {
 	return nil
 }
 
+func (p *blockingPanel) Update(*image.Gray, image.Rectangle) error { return nil }
+
 func TestCurrentAnswersDuringASlowRefresh(t *testing.T) {
 	show, _ := newShow(t, 3, nil)
 	panel := &blockingPanel{started: make(chan struct{}), release: make(chan struct{})}
@@ -330,5 +343,62 @@ func TestATimedStepDoesNotOverrideAShowNowThatBeatItToThePanel(t *testing.T) {
 	}
 	if !slices.Equal(panel.shown, []uint8{1}) || show.Current() != "b" {
 		t.Errorf("panel showed %v, current %q; want b to stay up", panel.shown, show.Current())
+	}
+}
+
+// framePanel keeps a copy of the whole panel, as Show and Update leave it.
+type framePanel struct{ img *image.Gray }
+
+func (p *framePanel) Show(s *image.Gray) error {
+	p.img = image.NewGray(s.Bounds())
+	copy(p.img.Pix, s.Pix)
+	return nil
+}
+
+func (p *framePanel) Update(s *image.Gray, r image.Rectangle) error {
+	draw.Draw(p.img, r, s, r.Min, draw.Src)
+	return nil
+}
+
+func TestClockIsOnTheSlideAndTicksWithAPartialRefresh(t *testing.T) {
+	lib := fakeLibrary{dir: t.TempDir()}
+	s := image.NewGray(image.Rect(0, 0, 1872, 1404))
+	var b bytes.Buffer
+	png.Encode(&b, s)
+	os.WriteFile(lib.SlidePath("a"), b.Bytes(), 0o644)
+
+	now := time.Date(2026, 10, 24, 14, 20, 0, 0, time.UTC)
+	panel := &framePanel{}
+	show := &Slideshow{
+		Library: lib, Panel: panel, Shuffle: &Shuffle{},
+		StatePath: filepath.Join(t.TempDir(), "shuffle.json"),
+		Rand:      newRand(), Log: log.New(io.Discard, "", 0),
+		Clock: true, Now: func() time.Time { return now },
+	}
+	if err := show.Tick(); err != nil {
+		t.Fatal(err)
+	}
+	if panel.img != nil {
+		t.Fatal("Tick before any Slide touched the panel")
+	}
+	if err := show.Step(); err != nil {
+		t.Fatal(err)
+	}
+	want := image.NewGray(s.Bounds())
+	box := clock.Draw(want, now)
+	if !bytes.Equal(panel.img.Pix, want.Pix) {
+		t.Fatal("Slide on the panel lacks the clock")
+	}
+
+	now = now.Add(5 * time.Minute)
+	if err := show.Tick(); err != nil {
+		t.Fatal(err)
+	}
+	clock.Draw(want, now)
+	if !bytes.Equal(panel.img.Pix, want.Pix) {
+		t.Error("Tick did not redraw the clock")
+	}
+	if got := clock.Box(s.Bounds()); got != box {
+		t.Errorf("box moved from %v to %v", box, got)
 	}
 }

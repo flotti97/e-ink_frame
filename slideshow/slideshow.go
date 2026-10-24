@@ -16,13 +16,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flotti97/e-ink_frame/clock"
 	"github.com/flotti97/e-ink_frame/internal/atomicfile"
 	"github.com/flotti97/e-ink_frame/library"
 )
 
-// Panel shows a Slide with one full Refresh.
+// Panel shows Slides on the e-paper panel.
 type Panel interface {
+	// Show puts s up with one full Refresh.
 	Show(s *image.Gray) error
+	// Update refreshes only area r from s, which otherwise matches what is
+	// on the panel.
+	Update(s *image.Gray, r image.Rectangle) error
 }
 
 // FakePanel stands in for the e-paper panel on a PC by writing the Slide it
@@ -40,6 +45,11 @@ func (p FakePanel) Show(s *image.Gray) error {
 	return atomicfile.Write(p.Path, b.Bytes())
 }
 
+// Update writes all of s to p.Path.
+func (p FakePanel) Update(s *image.Gray, _ image.Rectangle) error {
+	return p.Show(s)
+}
+
 // Library is the part of library.Library the Slideshow uses.
 type Library interface {
 	List() ([]library.Entry, error)
@@ -55,11 +65,18 @@ type Slideshow struct {
 	Interval  time.Duration
 	Rand      *rand.Rand
 	Log       *log.Logger
+	// Clock puts the time in words on every Slide and updates it every five
+	// minutes with a partial Refresh.
+	Clock bool
+
+	// Now is the time the Clock shows. Nil means time.Now.
+	Now func() time.Time
 
 	// Wait blocks for d or until ctx is done. Nil means a real timer.
 	Wait func(ctx context.Context, d time.Duration) error
 
-	refresh sync.Mutex // one Refresh at a time; guards Shuffle
+	refresh sync.Mutex  // one Refresh at a time; guards Shuffle and shown
+	shown   *image.Gray // what the panel shows, after a Refresh from here
 
 	mu          sync.Mutex // guards the fields below; never held during a Refresh
 	onPanel     string     // ID of the Slide the panel shows
@@ -78,13 +95,25 @@ func (s *Slideshow) Run(ctx context.Context) error {
 	s.refresh.Lock()
 	if s.currentStillExists() {
 		s.setOnPanel(s.Shuffle.Current)
+		// The panel's clock went stale while the Frame was down.
+		if s.Clock {
+			if sl, err := loadSlide(s.Library.SlidePath(s.Shuffle.Current)); err == nil {
+				s.shown = sl
+			}
+		}
 	}
 	s.refresh.Unlock()
+	if err := s.Tick(); err != nil {
+		s.Log.Printf("updating clock: %v", err)
+	}
 
 	if s.Current() == "" {
 		if err := s.Step(); err != nil {
 			s.Log.Print(err)
 		}
+	}
+	if s.Clock {
+		go s.runClock(ctx)
 	}
 	for {
 		gen, err := s.wait(ctx)
@@ -95,6 +124,37 @@ func (s *Slideshow) Run(ctx context.Context) error {
 			s.Log.Print(err)
 		}
 	}
+}
+
+// runClock updates the Clock at every five-minute mark until ctx is done.
+func (s *Slideshow) runClock(ctx context.Context) {
+	for {
+		if sleep(ctx, time.Until(clock.Next(s.now()))) != nil {
+			return
+		}
+		if err := s.Tick(); err != nil {
+			s.Log.Printf("updating clock: %v", err)
+		}
+	}
+}
+
+// Tick redraws the Clock on the Slide on the panel with a partial Refresh.
+// It does nothing before this Slideshow has put a Slide up, since only then
+// is the rest of the panel known.
+func (s *Slideshow) Tick() error {
+	s.refresh.Lock()
+	defer s.refresh.Unlock()
+	if !s.Clock || s.shown == nil {
+		return nil
+	}
+	return s.Panel.Update(s.shown, clock.Draw(s.shown, s.now()))
+}
+
+func (s *Slideshow) now() time.Time {
+	if s.Now == nil {
+		return time.Now()
+	}
+	return s.Now()
 }
 
 // wait blocks for one Interval, starting over whenever ShowNow puts a Slide
@@ -234,9 +294,14 @@ func (s *Slideshow) show(id string) error {
 	if err != nil {
 		return fmt.Errorf("Slide %s: %w", id, err)
 	}
+	if s.Clock {
+		clock.Draw(sl, s.now())
+	}
 	if err := s.Panel.Show(sl); err != nil {
+		s.shown = nil
 		return fmt.Errorf("showing Slide %s: %w", id, err)
 	}
+	s.shown = sl
 	s.setOnPanel(id)
 	return nil
 }

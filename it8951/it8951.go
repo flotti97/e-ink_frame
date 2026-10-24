@@ -123,6 +123,19 @@ func (p *Panel) Show(s *image.Gray) error {
 	return p.Sleep()
 }
 
+// Update refreshes area r of the panel from s without a flash, in GL16, then
+// puts the panel to sleep. r's left edge and width must be multiples of 4.
+func (p *Panel) Update(s *image.Gray, r image.Rectangle) error {
+	err := p.Load(s, r)
+	if err == nil {
+		err = p.Display(r, ModeGL16)
+	}
+	if serr := p.Sleep(); err == nil {
+		err = serr
+	}
+	return err
+}
+
 // Sleep puts the panel to sleep; Load wakes it again.
 func (p *Panel) Sleep() error {
 	return p.command(cmdSleep)

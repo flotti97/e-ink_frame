@@ -11,13 +11,14 @@ import (
 
 // Config holds the Frame's settings, read from a JSON file such as
 //
-//	{"interval": "45m", "library": "data", "state": "data/shuffle.json", "listen": ":8080", "vcom": -1.58}
+//	{"interval": "45m", "library": "data", "state": "data/shuffle.json", "listen": ":8080", "vcom": -1.58, "clock": true}
 type Config struct {
 	Interval time.Duration // time between Slides
 	Library  string        // Image library directory
 	State    string        // where the Shuffle is saved
 	Listen   string        // address of the upload page
 	VCOM     float64       // panel VCOM in volts, from its flex cable; 0 means unset
+	Clock    bool          // show the time in words on every Slide
 }
 
 // DefaultConfig is used for anything the config file leaves out.
@@ -26,6 +27,7 @@ var DefaultConfig = Config{
 	Library:  "data",
 	State:    "data/shuffle.json",
 	Listen:   ":8080",
+	Clock:    true,
 }
 
 // LoadConfig reads the config file at path. A missing file gives DefaultConfig.
@@ -45,6 +47,7 @@ func LoadConfig(path string) (Config, error) {
 		State    *string  `json:"state"`
 		Listen   *string  `json:"listen"`
 		VCOM     *float64 `json:"vcom"`
+		Clock    *bool    `json:"clock"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -72,6 +75,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if raw.VCOM != nil {
 		c.VCOM = *raw.VCOM
+	}
+	if raw.Clock != nil {
+		c.Clock = *raw.Clock
 	}
 	return c, nil
 }

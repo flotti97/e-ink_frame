@@ -70,3 +70,20 @@ func TestConfigReadsVCOM(t *testing.T) {
 		t.Errorf("vcom %v, want -1.58", c.VCOM)
 	}
 }
+
+func TestConfigClockIsOnUnlessTurnedOff(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, `{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Clock {
+		t.Error("clock off by default")
+	}
+	c, err = LoadConfig(writeConfig(t, `{"clock": false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Clock {
+		t.Error(`"clock": false ignored`)
+	}
+}

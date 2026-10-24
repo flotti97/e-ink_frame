@@ -80,6 +80,7 @@ func run(configPath, fakePanel string, logger *log.Logger) error {
 		Interval:  cfg.Interval,
 		Rand:      rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
 		Log:       logger,
+		Clock:     cfg.Clock,
 	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
