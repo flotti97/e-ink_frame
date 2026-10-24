@@ -1,0 +1,15 @@
+[Unit]
+Description=E-Ink Frame: Slideshow and upload page
+After=network.target
+
+[Service]
+User=pi
+Group=pi
+SupplementaryGroups=spi gpio
+WorkingDirectory=/home/pi/frame
+ExecStart=/home/pi/frame/frame -config /home/pi/frame/frame.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

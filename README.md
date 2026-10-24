@@ -74,7 +74,21 @@ The terms **Frame**, **Image**, **Slide**, **Slideshow** and **Refresh** are def
 
   The test card has 16 gray bars running from black on the left to white, above thin lines and a diagonal that show whether the pixel order is right.
 - Run the tests with `go test ./...`.
-- Deploy by copying the binary to the Pi and restarting the service.
+
+## Install on the Pi
+
+1. Set up Raspberry Pi OS on the Pi Zero W with SSH and Wi-Fi. Enable SPI (`dtparam=spi=on` in `/boot/config.txt`), and add the `pi` user to the `spi` and `gpio` groups.
+2. Connect the panel before powering on, and set the HAT's DIP switch to SPI.
+3. From this repo on your PC, build and install the service:
+
+   ```bash
+   deploy/deploy.sh pi@<pi-address>
+   ```
+
+   This cross-compiles one static ARMv6 binary and installs it under `~/frame` on the Pi. It also installs [deploy/frame.service](deploy/frame.service) as a systemd service that starts at boot and restarts 10 s after a crash.
+4. On a first install the script creates `~/frame/frame.json` and stops. Set `vcom` there to the value on the panel's flex cable, then run `sudo systemctl enable --now frame` on the Pi.
+
+To update, run `deploy/deploy.sh` again. It replaces the binary and the unit and restarts the service, and it keeps `frame.json` and the Image library in `~/frame/data`. Read the logs with `journalctl -u frame`.
 
 ## Panel notes
 
