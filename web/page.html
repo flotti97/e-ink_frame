@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>E-Ink Frame</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1a1a1a; --bg: #f6f5f2; --card: #fff; --muted: #6b6b6b; --line: #ddd; --bad: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #eee; --bg: #161616; --card: #222; --muted: #9a9a9a; --line: #333; --bad: #f2b8b5; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; font: 16px/1.4 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  main { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 16px; }
+  form.upload { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  form.upload input[type=file] { flex: 1 1 200px; min-width: 0; }
+  button { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--fg); color: var(--bg); cursor: pointer; }
+  button.delete { background: none; color: var(--bad); border-color: currentColor; padding: 6px 12px; }
+  .problems { margin: 16px 0 0; padding: 12px 16px; border: 1px solid var(--bad); border-radius: 8px; color: var(--bad); }
+  .problems ul { margin: 0; padding-left: 20px; }
+  .gallery { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
+  .gallery li { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .gallery img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--line); }
+  .meta { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 10px; }
+  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 0.9rem; }
+  .empty { color: var(--muted); margin-top: 24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>E-Ink Frame</h1>
+  <form class="upload" action="/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="images" accept="image/jpeg,image/png" multiple required>
+    <button type="submit">Upload</button>
+  </form>
+  {{with .Problems}}
+  <div class="problems" role="alert"><ul>{{range .}}<li>{{.}}</li>{{end}}</ul></div>
+  {{end}}
+  {{if .Entries}}
+  <ul class="gallery">
+    {{range .Entries}}
+    <li>
+      <img src="/slides/{{.ID}}.png" alt="{{.Name}}" loading="lazy">
+      <div class="meta">
+        <span class="name" title="{{.Name}}">{{.Name}}</span>
+        <form action="/delete/{{.ID}}" method="post" onsubmit="return confirm('Delete this Image?')">
+          <button class="delete" type="submit">Delete</button>
+        </form>
+      </div>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty">No Images yet. Upload a JPEG or PNG to start the Slideshow.</p>
+  {{end}}
+</main>
+</body>
+</html>

@@ -11,11 +11,12 @@ import (
 
 // Config holds the Frame's settings, read from a JSON file such as
 //
-//	{"interval": "45m", "library": "data", "state": "data/shuffle.json"}
+//	{"interval": "45m", "library": "data", "state": "data/shuffle.json", "listen": ":8080"}
 type Config struct {
 	Interval time.Duration // time between Slides
 	Library  string        // Image library directory
 	State    string        // where the Shuffle is saved
+	Listen   string        // address of the upload page
 }
 
 // DefaultConfig is used for anything the config file leaves out.
@@ -23,6 +24,7 @@ var DefaultConfig = Config{
 	Interval: 45 * time.Minute,
 	Library:  "data",
 	State:    "data/shuffle.json",
+	Listen:   ":8080",
 }
 
 // LoadConfig reads the config file at path. A missing file gives DefaultConfig.
@@ -40,6 +42,7 @@ func LoadConfig(path string) (Config, error) {
 		Interval *string `json:"interval"`
 		Library  *string `json:"library"`
 		State    *string `json:"state"`
+		Listen   *string `json:"listen"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -61,6 +64,9 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if raw.State != nil {
 		c.State = *raw.State
+	}
+	if raw.Listen != nil {
+		c.Listen = *raw.Listen
 	}
 	return c, nil
 }

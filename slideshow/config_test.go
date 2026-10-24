@@ -25,17 +25,20 @@ func TestConfigDefaultsTo45Minutes(t *testing.T) {
 	if c.Interval != 45*time.Minute {
 		t.Errorf("default interval %v, want 45m", c.Interval)
 	}
+	if c.Listen != ":8080" {
+		t.Errorf("default listen address %q, want :8080", c.Listen)
+	}
 	if c.Library == "" || c.State == "" {
 		t.Errorf("defaults missing paths: %+v", c)
 	}
 }
 
 func TestConfigReadsInterval(t *testing.T) {
-	c, err := LoadConfig(writeConfig(t, `{"interval": "1h30m", "library": "/srv/frame"}`))
+	c, err := LoadConfig(writeConfig(t, `{"interval": "1h30m", "library": "/srv/frame", "listen": "192.168.1.5:80"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Interval != 90*time.Minute || c.Library != "/srv/frame" {
+	if c.Interval != 90*time.Minute || c.Library != "/srv/frame" || c.Listen != "192.168.1.5:80" {
 		t.Errorf("got %+v", c)
 	}
 	if c.State == "" {

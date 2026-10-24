@@ -2,7 +2,7 @@
 
 A picture frame that slowly rotates through your photos on a 10.3" e-paper panel. No backlight, no glare, and the last picture stays on screen even without power.
 
-> **Status:** early development. The Slide preview, the Image library and the Slideshow (on a fake panel) exist so far.
+> **Status:** early development. The Slide preview, the Image library, the Slideshow (on a fake panel) and the upload page exist so far.
 
 ## Hardware
 
@@ -53,10 +53,12 @@ The terms **Frame**, **Image**, **Slide**, **Slideshow** and **Refresh** are def
   go run ./cmd/frame -fake-panel panel.png
   ```
 
+  It also serves the upload page on port 8080: open `http://<pi-address>:8080` on a phone or PC on the home network to upload Images, see the gallery and delete Images. There is no login, so don't expose this port to the internet.
+
   Settings come from `frame.json` (pass another file with `-config`). Every field is optional:
 
   ```json
-  {"interval": "45m", "library": "data", "state": "data/shuffle.json"}
+  {"interval": "45m", "library": "data", "state": "data/shuffle.json", "listen": ":8080"}
   ```
 
   The shuffle is saved in `state` after every Slide, so a restart carries on with the same round.

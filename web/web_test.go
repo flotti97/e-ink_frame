@@ -1,0 +1,199 @@
+package web
+
+import (
+	"bytes"
+	"image"
+	"image/png"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/flotti97/e-ink_frame/library"
+)
+
+func newServer(t *testing.T) (*library.Library, http.Handler) {
+	t.Helper()
+	lib, err := library.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lib, New(lib)
+}
+
+func pngBytes(t *testing.T, shade uint8) []byte {
+	t.Helper()
+	img := image.NewGray(image.Rect(0, 0, 40, 30))
+	for i := range img.Pix {
+		img.Pix[i] = shade
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// upload posts files (name → contents) as the upload form would.
+func upload(t *testing.T, h http.Handler, files map[string][]byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for name, data := range files {
+		part, err := w.CreateFormFile("images", name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		part.Write(data)
+	}
+	w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/upload", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func get(h http.Handler, path string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
+}
+
+func TestUploadAddsImageToGalleryWithItsSlide(t *testing.T) {
+	lib, h := newServer(t)
+
+	rec := upload(t, h, map[string][]byte{"cat.png": pngBytes(t, 80), "dog.png": pngBytes(t, 160)})
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+		t.Fatalf("upload answered %d → %q, want a redirect to the gallery", rec.Code, rec.Header().Get("Location"))
+	}
+
+	entries, _ := lib.List()
+	if len(entries) != 2 {
+		t.Fatalf("library holds %d Images, want 2", len(entries))
+	}
+	page := get(h, "/").Body.String()
+	for _, e := range entries {
+		if !strings.Contains(page, e.Name) || !strings.Contains(page, "/slides/"+e.ID+".png") {
+			t.Errorf("gallery is missing %s (%s)", e.Name, e.ID)
+		}
+		if _, err := os.Stat(lib.SlidePath(e.ID)); err != nil {
+			t.Errorf("no Slide for %s: %v", e.Name, err)
+		}
+		slide := get(h, "/slides/"+e.ID+".png")
+		if slide.Code != http.StatusOK || slide.Header().Get("Content-Type") != "image/png" {
+			t.Errorf("Slide %s served as %d %s", e.ID, slide.Code, slide.Header().Get("Content-Type"))
+		}
+	}
+}
+
+func TestDeleteRemovesImageAndSlide(t *testing.T) {
+	lib, h := newServer(t)
+	upload(t, h, map[string][]byte{"cat.png": pngBytes(t, 80)})
+	entries, _ := lib.List()
+	id := entries[0].ID
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/delete/"+id, nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("delete answered %d", rec.Code)
+	}
+	if entries, _ := lib.List(); len(entries) != 0 {
+		t.Errorf("Image still listed after delete")
+	}
+	if _, err := os.Stat(lib.SlidePath(id)); !os.IsNotExist(err) {
+		t.Errorf("Slide still on disk after delete")
+	}
+	if strings.Contains(get(h, "/").Body.String(), id) {
+		t.Errorf("gallery still shows the deleted Image")
+	}
+}
+
+func TestInvalidUploadShowsErrorAndKeepsThePageUsable(t *testing.T) {
+	lib, h := newServer(t)
+	upload(t, h, map[string][]byte{"keep.png": pngBytes(t, 30)})
+
+	rec := upload(t, h, map[string][]byte{"notes.txt": []byte("hello"), "good.png": pngBytes(t, 200)})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid upload answered %d, want 400", rec.Code)
+	}
+	page := rec.Body.String()
+	if !strings.Contains(page, "notes.txt") || !strings.Contains(page, "unsupported") {
+		t.Errorf("error page does not explain what went wrong:\n%s", page)
+	}
+	// Still the full page: gallery and upload form are there.
+	if !strings.Contains(page, "keep.png") || !strings.Contains(page, `action="/upload"`) {
+		t.Errorf("error page lost the gallery or the form")
+	}
+	// The valid file in the same upload was still added.
+	if entries, _ := lib.List(); len(entries) != 2 {
+		t.Errorf("library holds %d Images, want 2", len(entries))
+	}
+}
+
+func TestUploadWithoutFilesIsAnError(t *testing.T) {
+	_, h := newServer(t)
+	rec := upload(t, h, nil)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Choose") {
+		t.Errorf("empty upload answered %d", rec.Code)
+	}
+}
+
+func TestDeleteUnknownImageIsNotFound(t *testing.T) {
+	_, h := newServer(t)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/delete/nope", nil))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `action="/upload"`) {
+		t.Errorf("unknown delete answered %d without the page", rec.Code)
+	}
+}
+
+func TestNamesAreEscaped(t *testing.T) {
+	_, h := newServer(t)
+	upload(t, h, map[string][]byte{"<script>x</script>.png": pngBytes(t, 50)})
+	if strings.Contains(get(h, "/").Body.String(), "<script>x") {
+		t.Error("Image name rendered as HTML")
+	}
+}
+
+func TestPageWorksOnAPhone(t *testing.T) {
+	_, h := newServer(t)
+	page := get(h, "/").Body.String()
+	for _, want := range []string{`name="viewport"`, `accept="image/jpeg,image/png"`, "multiple"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+}
+
+func TestSlidePathCannotEscape(t *testing.T) {
+	_, h := newServer(t)
+	for _, p := range []string{"/slides/..%2Fimages%2Fx.png", "/slides/nope.png"} {
+		rec := get(h, p)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s answered %d, want 404", p, rec.Code)
+		}
+		io.Copy(io.Discard, rec.Body)
+	}
+}
+
+func TestCrossSiteRequestsAreRefused(t *testing.T) {
+	lib, h := newServer(t)
+	upload(t, h, map[string][]byte{"cat.png": pngBytes(t, 80)})
+	entries, _ := lib.List()
+
+	req := httptest.NewRequest(http.MethodPost, "/delete/"+entries[0].ID, nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("cross-site delete answered %d, want 403", rec.Code)
+	}
+	if entries, _ := lib.List(); len(entries) != 1 {
+		t.Error("cross-site request deleted an Image")
+	}
+}
