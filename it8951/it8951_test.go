@@ -172,3 +172,57 @@ func TestShowSleepsEvenWhenTheRefreshFails(t *testing.T) {
 		t.Errorf("last command %#x, want sleep", cs[len(cs)-1])
 	}
 }
+
+func TestLoadAndDisplayAddressAreaBottomUp(t *testing.T) {
+	bus := &fakeBus{maxLen: 4096}
+	p, err := Open(bus, -1.58)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := image.NewGray(image.Rect(0, 0, p.Width, p.Height))
+	r := image.Rect(8, 100, 72, 164)
+	bus.txs = nil
+	if err := p.Load(s, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Display(r, ModeA2); err != nil {
+		t.Fatal(err)
+	}
+	// The area's top row in the Slide is its bottom row on the controller.
+	area := words(preWrite, 8, preWrite, 1404-164, preWrite, 64, preWrite, 64)
+	var args [][]byte
+	for i, tx := range bus.txs {
+		switch {
+		case bytes.Equal(tx, words(preCommand, cmdLoadImgArea)): // after the pixel format
+			args = append(args, slices.Concat(bus.txs[i+2:i+6]...))
+		case bytes.Equal(tx, words(preCommand, cmdDisplayArea)): // before the mode
+			args = append(args, slices.Concat(bus.txs[i+1:i+5]...))
+		}
+	}
+	if len(args) != 2 || !bytes.Equal(args[0], area) || !bytes.Equal(args[1], area) {
+		t.Errorf("area args = % X, want % X twice", args, area)
+	}
+	// 64x64 pixels at 4 bits.
+	var n int
+	for _, tx := range bus.txs {
+		if len(tx) > 4 && binary.BigEndian.Uint16(tx) == preWrite {
+			n += len(tx) - 2
+		}
+	}
+	if n != 64*64/2 {
+		t.Errorf("sent %d pixel bytes, want %d", n, 64*64/2)
+	}
+}
+
+func TestLoadRejectsUnalignedArea(t *testing.T) {
+	p, err := Open(&fakeBus{maxLen: 4096}, -1.58)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := image.NewGray(image.Rect(0, 0, p.Width, p.Height))
+	for _, r := range []image.Rectangle{image.Rect(2, 0, 10, 8), image.Rect(0, 0, 6, 8), image.Rect(1868, 0, 1876, 8)} {
+		if err := p.Load(s, r); err == nil {
+			t.Errorf("area %v accepted", r)
+		}
+	}
+}

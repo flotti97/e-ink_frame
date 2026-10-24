@@ -51,8 +51,19 @@ const (
 	regLUTAFSR = 0x1224 // non-zero while a Refresh is running
 )
 
+// Mode picks the waveform of a Refresh: how fast it is, how many gray levels
+// it reaches and how much it flashes. Numbers are the 10.3" panel's.
+type Mode uint16
+
 const (
-	modeGC16     = 2 // full Refresh with 16 gray levels
+	ModeInit Mode = 0 // clears to white with heavy flashing
+	ModeDU   Mode = 1 // fast, black and white only
+	ModeGC16 Mode = 2 // 16 gray levels, flashes
+	ModeGL16 Mode = 3 // 16 gray levels, no flash, more ghosting
+	ModeA2   Mode = 6 // fastest, black and white only, ghosts quickly
+)
+
+const (
 	bpp4         = 2
 	littleEndian = 0
 
@@ -106,13 +117,32 @@ func (p *Panel) Show(s *image.Gray) error {
 		return fmt.Errorf("Slide is %dx%d, panel is %dx%d", b.Dx(), b.Dy(), p.Width, p.Height)
 	}
 	if err := p.refresh(s); err != nil {
-		p.command(cmdSleep)
+		p.Sleep()
 		return err
 	}
+	return p.Sleep()
+}
+
+// Sleep puts the panel to sleep; Load wakes it again.
+func (p *Panel) Sleep() error {
 	return p.command(cmdSleep)
 }
 
 func (p *Panel) refresh(s *image.Gray) error {
+	r := image.Rect(0, 0, p.Width, p.Height)
+	if err := p.Load(s, r); err != nil {
+		return err
+	}
+	return p.Display(r, ModeGC16)
+}
+
+// Load sends area r of s, in Slide coordinates, to the controller's buffer
+// without changing the panel. r's left edge and width must be multiples of 4.
+func (p *Panel) Load(s *image.Gray, r image.Rectangle) error {
+	if r.Min.X%4 != 0 || r.Dx()%4 != 0 || r.Empty() ||
+		!r.In(image.Rect(0, 0, p.Width, p.Height)) || !r.In(s.Bounds()) {
+		return fmt.Errorf("area %v not 4-aligned or outside the %dx%d panel", r, p.Width, p.Height)
+	}
 	if err := p.command(cmdRun); err != nil {
 		return err
 	}
@@ -122,23 +152,32 @@ func (p *Panel) refresh(s *image.Gray) error {
 	if err := p.writeReg(regLISAR, uint16(p.bufAddr)); err != nil {
 		return err
 	}
-	w, h := uint16(p.Width), uint16(p.Height)
-	if err := p.command(cmdLoadImgArea, littleEndian<<8|bpp4<<4, 0, 0, w, h); err != nil {
+	x, y, w, h := p.area(r)
+	if err := p.command(cmdLoadImgArea, littleEndian<<8|bpp4<<4, x, y, w, h); err != nil {
 		return err
 	}
-	if err := p.writePixels(pack(s)); err != nil {
+	if err := p.writePixels(pack(s.SubImage(r).(*image.Gray))); err != nil {
 		return fmt.Errorf("write pixels: %w", err)
 	}
-	if err := p.command(cmdLoadImgEnd); err != nil {
-		return err
-	}
+	return p.command(cmdLoadImgEnd)
+}
+
+// Display refreshes area r of the panel, in Slide coordinates, from the
+// controller's buffer with mode m and waits until the Refresh is done.
+func (p *Panel) Display(r image.Rectangle, m Mode) error {
 	if err := p.waitRefresh(); err != nil {
 		return err
 	}
-	if err := p.command(cmdDisplayArea, 0, 0, w, h, modeGC16); err != nil {
+	x, y, w, h := p.area(r)
+	if err := p.command(cmdDisplayArea, x, y, w, h, uint16(m)); err != nil {
 		return err
 	}
 	return p.waitRefresh()
+}
+
+// area converts r to controller coordinates, where rows run bottom-up.
+func (p *Panel) area(r image.Rectangle) (x, y, w, h uint16) {
+	return uint16(r.Min.X), uint16(p.Height - r.Max.Y), uint16(r.Dx()), uint16(r.Dy())
 }
 
 // pack turns s into 4-bit pixels, 0 black to 15 white, laid out the way the
