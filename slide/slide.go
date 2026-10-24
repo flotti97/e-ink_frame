@@ -3,7 +3,6 @@
 package slide
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -29,11 +28,15 @@ var (
 	pngMagic  = []byte("\x89PNG\r\n\x1a\n")
 )
 
-// Decode reads a JPEG or PNG Image. Other formats yield ErrUnsupported;
+// Decode reads a JPEG or PNG Image, turning JPEGs upright according to
+// their EXIF Orientation. Other formats yield ErrUnsupported;
 // unreadable JPEG or PNG data yields an error mentioning "corrupt".
 func Decode(r io.Reader) (image.Image, error) {
-	br := bufio.NewReader(r)
-	head, _ := br.Peek(len(pngMagic))
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	head := data[:min(len(data), len(pngMagic))]
 
 	var decode func(io.Reader) (image.Image, error)
 	var format string
@@ -46,9 +49,12 @@ func Decode(r io.Reader) (image.Image, error) {
 		return nil, ErrUnsupported
 	}
 
-	img, err := decode(br)
+	img, err := decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("corrupt %s: %w", format, err)
+	}
+	if format == "JPEG" {
+		img = orient(img, exifOrientation(data))
 	}
 	return img, nil
 }
