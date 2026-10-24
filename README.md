@@ -2,7 +2,7 @@
 
 A picture frame that slowly rotates through your photos on a 10.3" e-paper panel. No backlight, no glare, and the last picture stays on screen even without power.
 
-> **Status:** early development. Only the Slide preview command exists so far.
+> **Status:** early development. The Slide preview and the Image library exist so far.
 
 ## Hardware
 
@@ -38,6 +38,15 @@ The terms **Frame**, **Image**, **Slide**, **Slideshow** and **Refresh** are def
   ```
 
   It accepts JPEG or PNG and writes a 1872×1404, 16-level grayscale PNG.
+- Manage the Image library (stored under `./data` by default; change it with `-dir`):
+
+  ```bash
+  go run ./cmd/library add photo.jpg other.png
+  go run ./cmd/library list
+  go run ./cmd/library rm <id>
+  ```
+
+  Adding an Image keeps it unchanged and stores its Slide next to it. Removing it deletes both.
 - Run the tests with `go test ./...`.
 - Deploy by copying the binary to the Pi and restarting the service.
 
