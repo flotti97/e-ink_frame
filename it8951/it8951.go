@@ -60,7 +60,7 @@ const (
 	ModeDU   Mode = 1 // fast, black and white only
 	ModeGC16 Mode = 2 // 16 gray levels, flashes
 	ModeGL16 Mode = 3 // 16 gray levels, no flash, more ghosting
-	ModeA2   Mode = 6 // fastest, black and white only, ghosts quickly
+	ModeA2   Mode = 6 // fastest, but only between black and white: leaves grays as they are
 )
 
 const (
@@ -123,17 +123,19 @@ func (p *Panel) Show(s *image.Gray) error {
 	return p.Sleep()
 }
 
-// Update refreshes area r of the panel from s without a flash, in GL16, then
-// puts the panel to sleep. r's left edge and width must be multiples of 4.
-func (p *Panel) Update(s *image.Gray, r image.Rectangle) error {
-	err := p.Load(s, r)
-	if err == nil {
-		err = p.Display(r, ModeGL16)
+// Update refreshes area r of the panel from s without a flash: in DU when
+// quick, which only reaches black and white but leaves the other pixels in r
+// alone, else in GL16. r's left edge and width must be multiples of 4. The
+// panel stays awake until Sleep.
+func (p *Panel) Update(s *image.Gray, r image.Rectangle, quick bool) error {
+	if err := p.Load(s, r); err != nil {
+		return err
 	}
-	if serr := p.Sleep(); err == nil {
-		err = serr
+	m := ModeGL16
+	if quick {
+		m = ModeDU
 	}
-	return err
+	return p.Display(r, m)
 }
 
 // Sleep puts the panel to sleep; Load wakes it again.

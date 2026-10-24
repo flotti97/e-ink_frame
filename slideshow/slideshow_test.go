@@ -54,10 +54,12 @@ func (p *recordingPanel) Show(s *image.Gray) error {
 	return nil
 }
 
-func (p *recordingPanel) Update(_ *image.Gray, r image.Rectangle) error {
+func (p *recordingPanel) Update(_ *image.Gray, r image.Rectangle, _ bool) error {
 	p.updates = append(p.updates, r)
 	return nil
 }
+
+func (p *recordingPanel) Sleep() error { return nil }
 
 // fakeLibrary serves Slides whose first pixel identifies them.
 type fakeLibrary struct{ dir string }
@@ -312,7 +314,8 @@ func (p *blockingPanel) Show(*image.Gray) error {
 	return nil
 }
 
-func (p *blockingPanel) Update(*image.Gray, image.Rectangle) error { return nil }
+func (p *blockingPanel) Update(*image.Gray, image.Rectangle, bool) error { return nil }
+func (p *blockingPanel) Sleep() error                                    { return nil }
 
 func TestCurrentAnswersDuringASlowRefresh(t *testing.T) {
 	show, _ := newShow(t, 3, nil)
@@ -346,23 +349,38 @@ func TestATimedStepDoesNotOverrideAShowNowThatBeatItToThePanel(t *testing.T) {
 	}
 }
 
-// framePanel keeps a copy of the whole panel, as Show and Update leave it.
-type framePanel struct{ img *image.Gray }
+// framePanel keeps a copy of the whole panel, as Show and Update leave it,
+// and counts the quick Updates and whether it was left asleep.
+type framePanel struct {
+	img    *image.Gray
+	quick  int
+	asleep bool
+}
 
 func (p *framePanel) Show(s *image.Gray) error {
 	p.img = image.NewGray(s.Bounds())
 	copy(p.img.Pix, s.Pix)
+	p.asleep = true
 	return nil
 }
 
-func (p *framePanel) Update(s *image.Gray, r image.Rectangle) error {
+func (p *framePanel) Update(s *image.Gray, r image.Rectangle, quick bool) error {
 	draw.Draw(p.img, r, s, r.Min, draw.Src)
+	if quick {
+		p.quick++
+	}
+	p.asleep = false
 	return nil
 }
 
-func TestClockIsOnTheSlideAndTicksWithAPartialRefresh(t *testing.T) {
+func (p *framePanel) Sleep() error { p.asleep = true; return nil }
+
+func TestClockIsWrittenOntoTheSlideAndRewrittenOnTick(t *testing.T) {
 	lib := fakeLibrary{dir: t.TempDir()}
 	s := image.NewGray(image.Rect(0, 0, 1872, 1404))
+	for i := range s.Pix {
+		s.Pix[i] = 0xC0
+	}
 	var b bytes.Buffer
 	png.Encode(&b, s)
 	os.WriteFile(lib.SlidePath("a"), b.Bytes(), 0o644)
@@ -384,21 +402,27 @@ func TestClockIsOnTheSlideAndTicksWithAPartialRefresh(t *testing.T) {
 	if err := show.Step(); err != nil {
 		t.Fatal(err)
 	}
-	want := image.NewGray(s.Bounds())
-	box := clock.Draw(want, now)
-	if !bytes.Equal(panel.img.Pix, want.Pix) {
-		t.Fatal("Slide on the panel lacks the clock")
+	// written is what the Slide with the time in handwriting looks like.
+	written := func() *image.Gray {
+		w := image.NewGray(s.Bounds())
+		copy(w.Pix, s.Pix)
+		for _, st := range clock.Steps(now, w.Bounds()) {
+			st.Draw(w, clock.Ink(s, clock.Area(s.Bounds())))
+		}
+		return w
+	}
+	if !bytes.Equal(panel.img.Pix, written().Pix) {
+		t.Fatal("panel does not show the Slide with the time written on it")
+	}
+	if steps := len(clock.Steps(now, s.Bounds())); panel.quick != steps || !panel.asleep {
+		t.Errorf("%d quick Updates for %d steps, asleep %v", panel.quick, steps, panel.asleep)
 	}
 
 	now = now.Add(5 * time.Minute)
 	if err := show.Tick(); err != nil {
 		t.Fatal(err)
 	}
-	clock.Draw(want, now)
-	if !bytes.Equal(panel.img.Pix, want.Pix) {
-		t.Error("Tick did not redraw the clock")
-	}
-	if got := clock.Box(s.Bounds()); got != box {
-		t.Errorf("box moved from %v to %v", box, got)
+	if !bytes.Equal(panel.img.Pix, written().Pix) {
+		t.Error("Tick did not replace the time")
 	}
 }

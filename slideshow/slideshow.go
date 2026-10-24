@@ -26,8 +26,10 @@ type Panel interface {
 	// Show puts s up with one full Refresh.
 	Show(s *image.Gray) error
 	// Update refreshes only area r from s, which otherwise matches what is
-	// on the panel.
-	Update(s *image.Gray, r image.Rectangle) error
+	// on the panel. Quick Updates are fast but only reach black and white.
+	Update(s *image.Gray, r image.Rectangle, quick bool) error
+	// Sleep powers the panel down after Updates.
+	Sleep() error
 }
 
 // FakePanel stands in for the e-paper panel on a PC by writing the Slide it
@@ -46,9 +48,12 @@ func (p FakePanel) Show(s *image.Gray) error {
 }
 
 // Update writes all of s to p.Path.
-func (p FakePanel) Update(s *image.Gray, _ image.Rectangle) error {
+func (p FakePanel) Update(s *image.Gray, _ image.Rectangle, _ bool) error {
 	return p.Show(s)
 }
+
+// Sleep does nothing.
+func (FakePanel) Sleep() error { return nil }
 
 // Library is the part of library.Library the Slideshow uses.
 type Library interface {
@@ -65,8 +70,8 @@ type Slideshow struct {
 	Interval  time.Duration
 	Rand      *rand.Rand
 	Log       *log.Logger
-	// Clock puts the time in words on every Slide and updates it every five
-	// minutes with a partial Refresh.
+	// Clock writes the time in words onto every Slide, stroke by stroke with
+	// partial Refreshes, and rewrites it every five minutes.
 	Clock bool
 
 	// Now is the time the Clock shows. Nil means time.Now.
@@ -75,8 +80,8 @@ type Slideshow struct {
 	// Wait blocks for d or until ctx is done. Nil means a real timer.
 	Wait func(ctx context.Context, d time.Duration) error
 
-	refresh sync.Mutex  // one Refresh at a time; guards Shuffle and shown
-	shown   *image.Gray // what the panel shows, after a Refresh from here
+	refresh sync.Mutex  // one Refresh at a time; guards the fields below
+	clean   *image.Gray // the Slide on the panel, without the Clock
 
 	mu          sync.Mutex // guards the fields below; never held during a Refresh
 	onPanel     string     // ID of the Slide the panel shows
@@ -89,23 +94,23 @@ type Slideshow struct {
 // Interval.
 //
 // The panel keeps its picture without power, so after a restart the Slide
-// that was current stays up for a full Interval. Only when there is none, or
+// that was current stays up for a full Interval; with the Clock on it is
+// refreshed once to update the time. Only when there is none, or
 // it has been deleted, is a Slide shown straight away.
 func (s *Slideshow) Run(ctx context.Context) error {
 	s.refresh.Lock()
 	if s.currentStillExists() {
 		s.setOnPanel(s.Shuffle.Current)
-		// The panel's clock went stale while the Frame was down.
+		// The panel's clock went stale while the Frame was down. Partial
+		// Refreshes can't fix it yet: the controller was reset and takes the
+		// panel to be white, so the Slide goes up again with a full one.
 		if s.Clock {
-			if sl, err := loadSlide(s.Library.SlidePath(s.Shuffle.Current)); err == nil {
-				s.shown = sl
+			if err := s.show(s.Shuffle.Current); err != nil {
+				s.Log.Print(err)
 			}
 		}
 	}
 	s.refresh.Unlock()
-	if err := s.Tick(); err != nil {
-		s.Log.Printf("updating clock: %v", err)
-	}
 
 	if s.Current() == "" {
 		if err := s.Step(); err != nil {
@@ -138,16 +143,45 @@ func (s *Slideshow) runClock(ctx context.Context) {
 	}
 }
 
-// Tick redraws the Clock on the Slide on the panel with a partial Refresh.
-// It does nothing before this Slideshow has put a Slide up, since only then
-// is the rest of the panel known.
+// Tick rubs out the Clock on the panel and writes the current time. It does
+// nothing until the Slide on the panel is known.
 func (s *Slideshow) Tick() error {
 	s.refresh.Lock()
 	defer s.refresh.Unlock()
-	if !s.Clock || s.shown == nil {
+	if !s.Clock || s.clean == nil {
 		return nil
 	}
-	return s.Panel.Update(s.shown, clock.Draw(s.shown, s.now()))
+	return s.write(true)
+}
+
+// write writes the time onto the clean Slide on the panel, one pen Step per
+// quick Update, after first rubbing out the old time when erase is set. A
+// final slow Update of the whole Clock area clears the quick Updates' ghosts.
+func (s *Slideshow) write(erase bool) error {
+	sl := image.NewGray(s.clean.Bounds())
+	copy(sl.Pix, s.clean.Pix)
+	area := clock.Area(sl.Bounds())
+	err := func() error {
+		if erase {
+			if err := s.Panel.Update(sl, area, false); err != nil {
+				return err
+			}
+		}
+		ink := clock.Ink(sl, area)
+		start := time.Now()
+		steps := clock.Steps(s.now(), sl.Bounds())
+		for _, st := range steps {
+			if err := s.Panel.Update(sl, st.Draw(sl, ink), true); err != nil {
+				return err
+			}
+		}
+		s.Log.Printf("clock: wrote %q in %d steps in %s", clock.Phrase(s.now()), len(steps), time.Since(start).Round(time.Second))
+		return s.Panel.Update(sl, area, false)
+	}()
+	if serr := s.Panel.Sleep(); err == nil {
+		err = serr
+	}
+	return err
 }
 
 func (s *Slideshow) now() time.Time {
@@ -294,15 +328,17 @@ func (s *Slideshow) show(id string) error {
 	if err != nil {
 		return fmt.Errorf("Slide %s: %w", id, err)
 	}
-	if s.Clock {
-		clock.Draw(sl, s.now())
-	}
 	if err := s.Panel.Show(sl); err != nil {
-		s.shown = nil
+		s.clean = nil
 		return fmt.Errorf("showing Slide %s: %w", id, err)
 	}
-	s.shown = sl
+	s.clean = sl
 	s.setOnPanel(id)
+	if s.Clock {
+		if err := s.write(false); err != nil {
+			s.Log.Printf("writing clock: %v", err)
+		}
+	}
 	return nil
 }
 

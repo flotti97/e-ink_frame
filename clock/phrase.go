@@ -1,5 +1,5 @@
 // Package clock tells the time in Austrian German words, in steps of five
-// minutes, and draws it onto a Slide.
+// minutes, and writes it onto a Slide in handwriting.
 package clock
 
 import "time"
