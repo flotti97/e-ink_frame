@@ -6,6 +6,12 @@
 // For each Mode it blinks a patch, moves a square across the screen and
 // refreshes the whole panel, prints the timings, then leaves the result up
 // for a moment so ghosting can be judged before a full Refresh cleans up.
+//
+//	bench -vcom -1.58 -ink
+//
+// With -ink it instead writes lines over the gray bars, one small area at a
+// time: a band each in GL16, DU and A2, top to bottom. The result stays up,
+// so the panel shows whether a Mode leaves the grays around the ink alone.
 package main
 
 import (
@@ -35,18 +41,19 @@ func main() {
 	dev := flag.String("dev", "/dev/spidev0.0", "spidev device")
 	frames := flag.Int("frames", 10, "Refreshes per test")
 	look := flag.Duration("look", 5*time.Second, "time to look at each Mode's ghosting before cleaning up")
+	ink := flag.Bool("ink", false, "write lines over the gray bars instead and leave them up")
 	flag.Parse()
 	if *vcom == 0 || flag.NArg() != 0 || *frames < 1 {
 		fmt.Fprintln(os.Stderr, "usage: bench -vcom <volts> [-frames n] [-look 5s]")
 		os.Exit(2)
 	}
-	if err := run(*dev, *vcom, *frames, *look); err != nil {
+	if err := run(*dev, *vcom, *frames, *look, *ink); err != nil {
 		fmt.Fprintln(os.Stderr, "bench:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dev string, vcom float64, frames int, look time.Duration) error {
+func run(dev string, vcom float64, frames int, look time.Duration, ink bool) error {
 	bus, err := it8951.OpenSPIDev(dev)
 	if err != nil {
 		return err
@@ -57,6 +64,9 @@ func run(dev string, vcom float64, frames int, look time.Duration) error {
 		return err
 	}
 	defer p.Sleep()
+	if ink {
+		return writeInk(p)
+	}
 	fmt.Printf("panel %dx%d, %d frames per test\n\n", p.Width, p.Height, frames)
 	fmt.Printf("%-5s %-14s %9s %9s %9s %6s\n", "mode", "test", "area", "load", "refresh", "fps")
 
@@ -177,4 +187,46 @@ func background() *image.Gray {
 		}
 	}
 	return g
+}
+
+// writeInk draws a black and a white zigzag line across the gray bars in
+// each of three bands, refreshing one 48x48 area per pen step, the way a
+// handwriting animation would. The areas are much larger than the line, so
+// a Mode that disturbs untouched grays leaves visible squares.
+func writeInk(p *it8951.Panel) error {
+	bg := background()
+	full := bg.Bounds()
+	if err := p.Load(bg, full); err != nil {
+		return err
+	}
+	if err := p.Display(full, it8951.ModeGC16); err != nil {
+		return err
+	}
+	const step, area = 24, 48
+	bands := modes[1:] // GL16, DU, A2
+	band := full.Dy() / len(bands)
+	for i, mode := range bands {
+		start := time.Now()
+		var n int
+		for j, ink := range []*image.Uniform{image.Black, image.White} {
+			mid := i*band + band/4 + j*band/2
+			for x := 0; x+area <= full.Dx(); x += step {
+				// A zigzag 6 px thick, one step at a time.
+				y := mid + (x/step%4-2)*12
+				line := image.Rect(x, y, x+step, y+6)
+				draw.Draw(bg, line, ink, image.Point{}, draw.Src)
+				r := image.Rect(x, y-area/2, x+area, y+area/2).Intersect(full)
+				if err := p.Load(bg, r); err != nil {
+					return err
+				}
+				if err := p.Display(r, mode.m); err != nil {
+					return err
+				}
+				n++
+			}
+		}
+		fmt.Printf("%-5s %d pen steps, %.0f ms each\n", mode.name, n,
+			float64(time.Since(start).Milliseconds())/float64(n))
+	}
+	return nil
 }
