@@ -168,3 +168,61 @@ func TestLoadShuffleResetsOnlyCorruptState(t *testing.T) {
 		t.Errorf("unreadable state: got %v, %v; want a plain error and no Shuffle", s, err)
 	}
 }
+
+func TestMarkCountsAManualPickInTheRound(t *testing.T) {
+	all := ids(5)
+	var s Shuffle
+	r := newRand()
+	first, _ := s.Next(all, r)
+
+	// Pick one that hasn't been shown yet this round.
+	manual := all[0]
+	if manual == first {
+		manual = all[1]
+	}
+	s.Mark(manual, all)
+	if s.Current != manual {
+		t.Errorf("current is %q, want %q", s.Current, manual)
+	}
+
+	seen := []string{first, manual}
+	for i := 0; i < len(all)-2; i++ {
+		id, _ := s.Next(all, r)
+		if slices.Contains(seen, id) {
+			t.Fatalf("%s repeated before the round finished (%v)", id, seen)
+		}
+		seen = append(seen, id)
+	}
+}
+
+func TestMarkingAnAlreadyShownSlideDoesNotRestartTheRound(t *testing.T) {
+	all := ids(4)
+	var s Shuffle
+	r := newRand()
+	a, _ := s.Next(all, r)
+	b, _ := s.Next(all, r)
+
+	s.Mark(a, all)
+
+	var rest []string
+	for i := 0; i < 2; i++ {
+		id, _ := s.Next(all, r)
+		rest = append(rest, id)
+	}
+	if slices.Contains(rest, a) || slices.Contains(rest, b) {
+		t.Errorf("rest of the round %v repeats %s or %s", rest, a, b)
+	}
+}
+
+func TestMarkingInAFinishedRoundStartsTheNextOne(t *testing.T) {
+	all := ids(3)
+	var s Shuffle
+	r := newRand()
+	for range all {
+		s.Next(all, r)
+	}
+	s.Mark(all[0], all)
+	if !slices.Equal(s.Shown, []string{all[0]}) {
+		t.Errorf("shown %v, want a new round holding only %s", s.Shown, all[0])
+	}
+}

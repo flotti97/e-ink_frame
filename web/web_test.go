@@ -2,6 +2,8 @@ package web
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
@@ -15,13 +17,37 @@ import (
 	"github.com/flotti97/e-ink_frame/library"
 )
 
+// fakeSlideshow records "show now" presses.
+type fakeSlideshow struct {
+	current string
+	err     error
+	shown   []string
+}
+
+func (f *fakeSlideshow) ShowNow(id string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.shown = append(f.shown, id)
+	f.current = id
+	return nil
+}
+
+func (f *fakeSlideshow) Current() string { return f.current }
+
 func newServer(t *testing.T) (*library.Library, http.Handler) {
+	lib, _, h := newServerWithSlideshow(t)
+	return lib, h
+}
+
+func newServerWithSlideshow(t *testing.T) (*library.Library, *fakeSlideshow, http.Handler) {
 	t.Helper()
 	lib, err := library.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return lib, New(lib)
+	show := &fakeSlideshow{}
+	return lib, show, New(lib, show)
 }
 
 func pngBytes(t *testing.T, shade uint8) []byte {
@@ -195,5 +221,59 @@ func TestCrossSiteRequestsAreRefused(t *testing.T) {
 	}
 	if entries, _ := lib.List(); len(entries) != 1 {
 		t.Error("cross-site request deleted an Image")
+	}
+}
+
+func post(h http.Handler, path string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+	return rec
+}
+
+func TestShowNowPutsThatSlideUp(t *testing.T) {
+	lib, show, h := newServerWithSlideshow(t)
+	upload(t, h, map[string][]byte{"cat.png": pngBytes(t, 80), "dog.png": pngBytes(t, 160)})
+	entries, _ := lib.List()
+	id := entries[1].ID
+
+	if !strings.Contains(get(h, "/").Body.String(), `action="/show/`+id+`"`) {
+		t.Fatal("gallery has no show-now button for the Image")
+	}
+	rec := post(h, "/show/"+id)
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("show now answered %d, want a redirect to the gallery", rec.Code)
+	}
+	if len(show.shown) != 1 || show.shown[0] != id {
+		t.Errorf("Slideshow was asked to show %v, want [%s]", show.shown, id)
+	}
+}
+
+func TestShowNowErrorsKeepThePage(t *testing.T) {
+	_, show, h := newServerWithSlideshow(t)
+	show.err = fmt.Errorf("x: %w", library.ErrNotFound)
+	if rec := post(h, "/show/x"); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `action="/upload"`) {
+		t.Errorf("unknown Image answered %d", rec.Code)
+	}
+	show.err = errors.New("panel unplugged")
+	rec := post(h, "/show/x")
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "panel unplugged") {
+		t.Errorf("failed Refresh answered %d without the reason", rec.Code)
+	}
+}
+
+func TestGalleryHighlightsTheCurrentSlide(t *testing.T) {
+	lib, show, h := newServerWithSlideshow(t)
+	upload(t, h, map[string][]byte{"cat.png": pngBytes(t, 80), "dog.png": pngBytes(t, 160)})
+	entries, _ := lib.List()
+	show.current = entries[0].ID
+
+	page := get(h, "/").Body.String()
+	if n := strings.Count(page, `aria-current="true"`); n != 1 {
+		t.Fatalf("%d Images marked current, want 1", n)
+	}
+	marked := page[strings.Index(page, `aria-current="true"`):]
+	marked = marked[:strings.Index(marked, "</li>")]
+	if !strings.Contains(marked, entries[0].ID) || strings.Contains(marked, entries[1].ID) {
+		t.Errorf("the wrong Image is marked current")
 	}
 }

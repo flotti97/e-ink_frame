@@ -194,3 +194,141 @@ func TestRestartShowsASlideAtOnceWhenTheCurrentOneIsGone(t *testing.T) {
 		t.Errorf("showed %d Slides before the first wait, want 1", len(panel.shown))
 	}
 }
+
+func newShow(t *testing.T, n int, wait func(context.Context, time.Duration) error) (*Slideshow, *recordingPanel) {
+	panel := &recordingPanel{}
+	return &Slideshow{
+		Library: newFakeLibrary(t, n), Panel: panel, Shuffle: &Shuffle{},
+		StatePath: filepath.Join(t.TempDir(), "state.json"), Interval: time.Minute, Rand: newRand(),
+		Log: log.New(io.Discard, "", 0), Wait: wait,
+	}, panel
+}
+
+func TestShowNowPutsTheSlideUpAtOnce(t *testing.T) {
+	show, panel := newShow(t, 4, nil)
+	if err := show.ShowNow("c"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(panel.shown, []uint8{2}) {
+		t.Errorf("panel showed %v, want Slide c", panel.shown)
+	}
+	if show.Current() != "c" {
+		t.Errorf("Current() = %q, want c", show.Current())
+	}
+	saved, _ := LoadShuffle(show.StatePath)
+	if saved.Current != "c" || !slices.Contains(saved.Shown, "c") {
+		t.Errorf("saved shuffle %+v does not record c", saved)
+	}
+}
+
+func TestShowNowRestartsTheIntervalAndKeepsTheRound(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var show *Slideshow
+	var waits int
+	show, panel := newShow(t, 4, func(wctx context.Context, d time.Duration) error {
+		waits++
+		switch waits {
+		case 1: // a "show now" press while waiting
+			manual := "a"
+			if show.Current() == "a" {
+				manual = "b"
+			}
+			if err := show.ShowNow(manual); err != nil {
+				t.Error(err)
+			}
+			<-wctx.Done() // the press cuts this wait short
+			return wctx.Err()
+		case 2, 3:
+			return nil
+		default:
+			cancel()
+			return ctx.Err()
+		}
+	})
+	show.Run(ctx)
+
+	// 1 automatic, 1 manual, then the 2 left in the round: each Slide once.
+	if len(panel.shown) != 4 {
+		t.Fatalf("panel showed %v, want 4 Slides", panel.shown)
+	}
+	if got := slices.Sorted(slices.Values(panel.shown)); !slices.Equal(got, []uint8{0, 1, 2, 3}) {
+		t.Errorf("round %v repeats a Slide", panel.shown)
+	}
+}
+
+func TestShowNowUnknownSlide(t *testing.T) {
+	show, panel := newShow(t, 2, nil)
+	if err := show.ShowNow("zzz"); !errors.Is(err, library.ErrNotFound) {
+		t.Errorf("err = %v, want library.ErrNotFound", err)
+	}
+	if len(panel.shown) != 0 {
+		t.Error("panel changed")
+	}
+}
+
+func TestCurrentIsWhatIsReallyOnThePanel(t *testing.T) {
+	show, _ := newShow(t, 0, nil)
+	lib := show.Library.(fakeLibrary)
+	os.WriteFile(lib.SlidePath("broken"), []byte("not a png"), 0o644)
+
+	if err := show.Step(); err == nil {
+		t.Fatal("broken Slide showed without error")
+	}
+	if show.Current() != "" {
+		t.Errorf("Current() = %q after a failed Refresh, want nothing", show.Current())
+	}
+}
+
+func TestCurrentAfterRestartIsTheSavedSlide(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	show, _ := newShow(t, 3, func(context.Context, time.Duration) error { cancel(); return ctx.Err() })
+	show.Shuffle = &Shuffle{Shown: []string{"b"}, Current: "b"}
+	show.Run(ctx)
+	if show.Current() != "b" {
+		t.Errorf("Current() = %q, want the Slide left on the panel, b", show.Current())
+	}
+}
+
+// blockingPanel holds every Refresh until release is closed.
+type blockingPanel struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingPanel) Show(*image.Gray) error {
+	p.started <- struct{}{}
+	<-p.release
+	return nil
+}
+
+func TestCurrentAnswersDuringASlowRefresh(t *testing.T) {
+	show, _ := newShow(t, 3, nil)
+	panel := &blockingPanel{started: make(chan struct{}), release: make(chan struct{})}
+	show.Panel = panel
+	defer close(panel.release)
+
+	go show.Step()
+	<-panel.started
+
+	done := make(chan struct{})
+	go func() { show.Current(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Current() blocked while the panel was refreshing")
+	}
+}
+
+func TestATimedStepDoesNotOverrideAShowNowThatBeatItToThePanel(t *testing.T) {
+	show, panel := newShow(t, 3, nil)
+	gen := show.generation()                  // the timer's wait began here...
+	if err := show.ShowNow("b"); err != nil { // ...a press landed as it fired...
+		t.Fatal(err)
+	}
+	if err := show.timedStep(gen); err != nil { // ...and then the timed Step ran.
+		t.Fatal(err)
+	}
+	if !slices.Equal(panel.shown, []uint8{1}) || show.Current() != "b" {
+		t.Errorf("panel showed %v, current %q; want b to stay up", panel.shown, show.Current())
+	}
+}

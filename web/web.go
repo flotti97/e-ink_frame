@@ -1,5 +1,6 @@
 // Package web serves the upload page: a gallery of the stored Images with an
-// upload form and a delete button on each.
+// upload form, and on each Image a "show now" and a delete button. The Slide
+// on the panel is highlighted.
 package web
 
 import (
@@ -23,17 +24,25 @@ var pageHTML string
 
 var page = template.Must(template.New("page").Parse(pageHTML))
 
+// Slideshow is the running Slideshow the page controls.
+type Slideshow interface {
+	ShowNow(id string) error
+	Current() string
+}
+
 type server struct {
-	lib *library.Library
+	lib  *library.Library
+	show Slideshow
 }
 
 // New returns the handler for the upload page.
-func New(lib *library.Library) http.Handler {
-	s := &server{lib: lib}
+func New(lib *library.Library, show Slideshow) http.Handler {
+	s := &server{lib: lib, show: show}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.gallery)
 	mux.HandleFunc("POST /upload", s.upload)
 	mux.HandleFunc("POST /delete/{id}", s.delete)
+	mux.HandleFunc("POST /show/{id}", s.showNow)
 	mux.HandleFunc("GET /slides/{file}", s.slide)
 	// There is no login, so refuse form posts that other websites make the
 	// browser send to the Frame.
@@ -89,6 +98,18 @@ func (s *server) delete(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) showNow(w http.ResponseWriter, r *http.Request) {
+	err := s.show.ShowNow(r.PathValue("id"))
+	switch {
+	case errors.Is(err, library.ErrNotFound):
+		s.render(w, http.StatusNotFound, []string{"That Image is gone."})
+	case err != nil:
+		s.render(w, http.StatusInternalServerError, []string{"Show now failed: " + err.Error()})
+	default:
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}
+}
+
 func (s *server) slide(w http.ResponseWriter, r *http.Request) {
 	id, ok := strings.CutSuffix(r.PathValue("file"), ".png")
 	entries, err := s.lib.List()
@@ -114,7 +135,8 @@ func (s *server) render(w http.ResponseWriter, status int, problems []string) {
 	if err := page.Execute(w, struct {
 		Problems []string
 		Entries  []library.Entry
-	}{problems, entries}); err != nil {
+		Current  string
+	}{problems, entries, s.show.Current()}); err != nil {
 		log.Printf("web: rendering page: %v", err)
 	}
 }

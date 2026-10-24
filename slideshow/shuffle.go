@@ -45,6 +45,20 @@ func (s *Shuffle) Next(ids []string, r *rand.Rand) (string, bool) {
 	return pick, true
 }
 
+// Mark records that id was put on the panel by hand, out of turn, so the
+// automatic picks that follow still show every Slide once before any repeats.
+// ids are the Slides that exist right now.
+func (s *Shuffle) Mark(id string, ids []string) {
+	s.Shown = slices.DeleteFunc(s.Shown, func(shown string) bool { return !slices.Contains(ids, shown) })
+	if len(s.Shown) >= len(ids) {
+		s.Shown = nil // the round was already over; this starts the next one
+	}
+	if !slices.Contains(s.Shown, id) {
+		s.Shown = append(s.Shown, id)
+	}
+	s.Current = id
+}
+
 // ErrCorruptState means the saved Shuffle could not be parsed.
 var ErrCorruptState = errors.New("corrupt shuffle state")
 

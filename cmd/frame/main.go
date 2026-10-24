@@ -58,9 +58,18 @@ func run(configPath, fakePanel string, logger *log.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	show := &slideshow.Slideshow{
+		Library:   lib,
+		Panel:     slideshow.FakePanel{Path: fakePanel},
+		Shuffle:   shuffle,
+		StatePath: cfg.State,
+		Interval:  cfg.Interval,
+		Rand:      rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
+		Log:       logger,
+	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           web.New(lib),
+		Handler:           web.New(lib, show),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       10 * time.Minute, // big uploads over slow Wi-Fi
 	}
@@ -81,15 +90,6 @@ func run(configPath, fakePanel string, logger *log.Logger) error {
 	}()
 
 	logger.Printf("Slideshow every %s from %s", cfg.Interval, cfg.Library)
-	show := &slideshow.Slideshow{
-		Library:   lib,
-		Panel:     slideshow.FakePanel{Path: fakePanel},
-		Shuffle:   shuffle,
-		StatePath: cfg.State,
-		Interval:  cfg.Interval,
-		Rand:      rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
-		Log:       logger,
-	}
 	err = show.Run(ctx)
 	select {
 	case serr := <-serveErr:
