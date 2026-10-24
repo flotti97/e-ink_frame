@@ -2,7 +2,7 @@
 
 A picture frame that slowly rotates through your photos on a 10.3" e-paper panel. No backlight, no glare, and the last picture stays on screen even without power.
 
-> **Status:** design phase. Nothing is implemented yet.
+> **Status:** early development. Only the Slide preview command exists so far.
 
 ## Hardware
 
@@ -31,7 +31,14 @@ The terms **Frame**, **Image**, **Slide**, **Slideshow** and **Refresh** are def
 
 ## Development
 
-- Develop on your PC. A PC-side preview renders a **Slide** as a PNG, so you don't need the panel.
+- Develop on your PC. A PC-side preview renders a **Slide** as a PNG, so you don't need the panel:
+
+  ```bash
+  go run ./cmd/preview photo.jpg slide.png
+  ```
+
+  It accepts JPEG or PNG and writes a 1872×1404, 16-level grayscale PNG.
+- Run the tests with `go test ./...`.
 - Deploy by copying the binary to the Pi and restarting the service.
 
 ## Panel notes
