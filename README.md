@@ -13,7 +13,7 @@ A picture frame that slowly rotates through your photos on a 10.3" e-paper panel
 ## How it works
 
 1. Someone uploads a JPEG or PNG **Image** through a small web page on the Pi, reachable from the home network only.
-2. The **Image** is processed once into a **Slide**: crop to fill with a saliency-based smart crop, then plain 16-level grayscale with no dithering.
+2. The **Image** is processed once into a **Slide**: crop to fill with a saliency-based smart crop, then 16-level grayscale with Floyd–Steinberg dithering.
 3. The **Slideshow** shows one **Slide** at a time, every 45 minutes by default. The order is shuffled, and every **Slide** is shown once before any repeats.
 4. Each change is a full **Refresh** of the panel. The panel sleeps between Refreshes, and the last **Slide** stays visible if Wi-Fi or the service fails.
 

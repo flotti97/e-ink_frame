@@ -45,15 +45,22 @@ func TestToneMapsExtremesAndRoundsToNearestLevel(t *testing.T) {
 	}
 }
 
-func TestToneHasNoDithering(t *testing.T) {
-	src := image.NewGray(image.Rect(0, 0, 20, 20))
+func TestToneDithersFlatAreasToTheirMeanGray(t *testing.T) {
+	src := image.NewGray(image.Rect(0, 0, 40, 40))
 	for i := range src.Pix {
-		src.Pix[i] = 100
+		src.Pix[i] = 100 // between levels 85 and 102
 	}
 	got := Tone(src)
+
+	sum, levels := 0, map[uint8]bool{}
 	for _, v := range got.Pix {
-		if v != got.Pix[0] {
-			t.Fatal("flat input produced varying output; looks dithered")
-		}
+		sum += int(v)
+		levels[v] = true
+	}
+	if len(levels) < 2 {
+		t.Fatal("flat in-between gray produced a single level; not dithered")
+	}
+	if mean := float64(sum) / float64(len(got.Pix)); mean < 98 || mean > 102 {
+		t.Errorf("dithered mean = %.1f, want about 100", mean)
 	}
 }
