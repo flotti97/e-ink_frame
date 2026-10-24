@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flotti97/e-ink_frame/internal/atomicfile"
 	"github.com/flotti97/e-ink_frame/slide"
 )
 
@@ -171,14 +172,14 @@ func (l *Library) Add(name string, r io.Reader) (Entry, error) {
 		return Entry{}, err
 	}
 
-	if err := writeFile(l.SlidePath(id), s.Bytes()); err != nil {
+	if err := atomicfile.Write(l.SlidePath(id), s.Bytes()); err != nil {
 		return Entry{}, fmt.Errorf("%s: %w", name, err)
 	}
-	if err := writeFile(l.ImagePath(e), data); err != nil {
+	if err := atomicfile.Write(l.ImagePath(e), data); err != nil {
 		os.Remove(l.SlidePath(id))
 		return Entry{}, fmt.Errorf("%s: %w", name, err)
 	}
-	if err := writeFile(l.entryPath(id), meta); err != nil {
+	if err := atomicfile.Write(l.entryPath(id), meta); err != nil {
 		os.Remove(l.SlidePath(id))
 		os.Remove(l.ImagePath(e))
 		return Entry{}, fmt.Errorf("%s: %w", name, err)
@@ -248,31 +249,4 @@ func (l *Library) get(id string) (Entry, error) {
 		return Entry{}, fmt.Errorf("%s: corrupt entry: %w", id, err)
 	}
 	return e, nil
-}
-
-// writeFile writes via a temporary file and rename, so readers never see a
-// partly written file.
-func writeFile(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync() // the Frame may lose power at any time
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Chmod(tmp, 0o644)
-	}
-	if err == nil {
-		err = os.Rename(tmp, path)
-	}
-	if err != nil {
-		os.Remove(tmp)
-	}
-	return err
 }
