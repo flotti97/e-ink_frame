@@ -2,7 +2,7 @@
 
 A picture frame that slowly rotates through your photos on a 10.3" e-paper panel. No backlight, no glare, and the last picture stays on screen even without power.
 
-> **Status:** early development. The Slide preview, the Image library, the Slideshow (on a fake panel), the upload page with "show now" and a one-Slide command for the real panel exist so far.
+> **Status:** early development. The Slide preview, the Image library, the Slideshow on the real panel and the upload page with "show now" exist so far.
 
 ## Hardware
 
@@ -47,7 +47,7 @@ The terms **Frame**, **Image**, **Slide**, **Slideshow** and **Refresh** are def
   ```
 
   Adding an Image keeps it unchanged and stores its Slide next to it. Removing it deletes both.
-- Run the Slideshow on a fake panel, which writes the current Slide to a PNG you can keep open in an image viewer:
+- Run the Slideshow. On the Pi it drives the panel, which needs `vcom` in the config (see below). On a PC, use a fake panel, which writes the current Slide to a PNG you can keep open in an image viewer:
 
   ```bash
   go run ./cmd/frame -fake-panel panel.png
@@ -58,8 +58,10 @@ The terms **Frame**, **Image**, **Slide**, **Slideshow** and **Refresh** are def
   Settings come from `frame.json` (pass another file with `-config`). Every field is optional:
 
   ```json
-  {"interval": "45m", "library": "data", "state": "data/shuffle.json", "listen": ":8080"}
+  {"interval": "45m", "library": "data", "state": "data/shuffle.json", "listen": ":8080", "vcom": -1.58}
   ```
+
+  `vcom` is the value printed on the panel's flex cable. There's no default, because a wrong value can damage the panel.
 
   The shuffle is saved in `state` after every Slide, so a restart carries on with the same round.
 - Put one Slide (a Slide PNG, such as one from `data/slides`) or a test card on the real panel, on the Pi. Pass the VCOM from the panel's flex cable:

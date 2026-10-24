@@ -60,3 +60,13 @@ func TestConfigRejectsBadValues(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigReadsVCOM(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, `{"vcom": -1.58}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.VCOM != -1.58 {
+		t.Errorf("vcom %v, want -1.58", c.VCOM)
+	}
+}

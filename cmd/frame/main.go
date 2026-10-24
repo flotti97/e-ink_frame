@@ -1,9 +1,10 @@
 // Command frame runs the Slideshow and serves the upload page.
 //
-//	frame [-config frame.json] -fake-panel panel.png
+//	frame [-config frame.json] [-fake-panel panel.png]
 //
-// Until the real panel driver exists, -fake-panel is required: each Slide is
-// written to that PNG instead of the e-paper panel.
+// Slides go to the e-paper panel over SPI, which needs "vcom" in the config.
+// With -fake-panel each Slide is written to that PNG instead, for running on
+// a PC.
 package main
 
 import (
@@ -19,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flotti97/e-ink_frame/it8951"
 	"github.com/flotti97/e-ink_frame/library"
 	"github.com/flotti97/e-ink_frame/slideshow"
 	"github.com/flotti97/e-ink_frame/web"
@@ -28,11 +30,6 @@ func main() {
 	configPath := flag.String("config", "frame.json", "config file (missing means defaults)")
 	fakePanel := flag.String("fake-panel", "", "write each Slide to this PNG instead of the panel")
 	flag.Parse()
-	if *fakePanel == "" {
-		fmt.Fprintln(os.Stderr, "frame: -fake-panel is required until the real panel is supported")
-		os.Exit(2)
-	}
-
 	logger := log.New(os.Stderr, "frame: ", log.LstdFlags)
 	if err := run(*configPath, *fakePanel, logger); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Fatal(err)
@@ -55,12 +52,29 @@ func run(configPath, fakePanel string, logger *log.Logger) error {
 		return err
 	}
 
+	var panel slideshow.Panel = slideshow.FakePanel{Path: fakePanel}
+	if fakePanel == "" {
+		if cfg.VCOM == 0 {
+			return fmt.Errorf("%s: set \"vcom\" to the value on the panel's flex cable, or pass -fake-panel", configPath)
+		}
+		bus, err := it8951.OpenSPIDev("/dev/spidev0.0")
+		if err != nil {
+			return err
+		}
+		defer bus.Close()
+		p, err := it8951.Open(bus, cfg.VCOM)
+		if err != nil {
+			return fmt.Errorf("panel: %w", err)
+		}
+		panel = p
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	show := &slideshow.Slideshow{
 		Library:   lib,
-		Panel:     slideshow.FakePanel{Path: fakePanel},
+		Panel:     panel,
 		Shuffle:   shuffle,
 		StatePath: cfg.State,
 		Interval:  cfg.Interval,
