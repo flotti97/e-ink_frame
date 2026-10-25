@@ -15,13 +15,26 @@ import (
 	"testing"
 
 	"github.com/flotti97/e-ink_frame/library"
+	"github.com/flotti97/e-ink_frame/slideshow"
 )
 
-// fakeSlideshow records "show now" presses.
+// fakeSlideshow records "show now" presses and the Clock settings.
 type fakeSlideshow struct {
-	current string
-	err     error
-	shown   []string
+	current  string
+	err      error
+	shown    []string
+	clock    slideshow.ClockSettings
+	clockErr error
+}
+
+func (f *fakeSlideshow) ClockSettings() slideshow.ClockSettings { return f.clock }
+
+func (f *fakeSlideshow) SetClock(c slideshow.ClockSettings) error {
+	if f.clockErr != nil {
+		return f.clockErr
+	}
+	f.clock = c
+	return nil
 }
 
 func (f *fakeSlideshow) ShowNow(id string) error {
@@ -276,4 +289,50 @@ func TestGalleryHighlightsTheCurrentSlide(t *testing.T) {
 	if !strings.Contains(marked, entries[0].ID) || strings.Contains(marked, entries[1].ID) {
 		t.Errorf("the wrong Image is marked current")
 	}
+}
+
+func TestClockSettingsAreShownAndSaved(t *testing.T) {
+	_, show, h := newServerWithSlideshow(t)
+	show.clock = slideshow.ClockSettings{On: true, Step: 20, Style: "ink"}
+	page := get(h, "/").Body.String()
+	for _, want := range []string{`action="/clock"`, `value="true" checked`, `name="step"`, `value="20"`, `value="ink" selected`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+	// An unchecked box sends nothing.
+	if rec := postForm(h, "/clock", "step=40&style=chalk"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving answered %d", rec.Code)
+	}
+	if want := (slideshow.ClockSettings{Step: 40, Style: "chalk"}); show.clock != want {
+		t.Errorf("clock = %+v, want %+v", show.clock, want)
+	}
+	page = get(h, "/").Body.String()
+	if strings.Contains(page, "checked") || !strings.Contains(page, `value="chalk" selected`) {
+		t.Error("page does not show the saved settings")
+	}
+}
+
+func TestBadClockSettingsKeepThePage(t *testing.T) {
+	_, show, h := newServerWithSlideshow(t)
+	for _, form := range []string{"on=true&step=x&style=ink", "on=true&step=1&style=ink", "on=true&step=20&style=crayon"} {
+		if rec := postForm(h, "/clock", form); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `action="/upload"`) {
+			t.Errorf("%s answered %d", form, rec.Code)
+		}
+	}
+	if show.clock != (slideshow.ClockSettings{}) {
+		t.Errorf("bad settings reached the Slideshow: %+v", show.clock)
+	}
+	show.clockErr = errors.New("disk full")
+	if rec := postForm(h, "/clock", "step=20&style=ink"); rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "disk full") {
+		t.Errorf("failed save answered %d without the reason", rec.Code)
+	}
+}
+
+func postForm(h http.Handler, path, form string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }

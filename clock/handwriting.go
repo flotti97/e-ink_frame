@@ -24,7 +24,7 @@ func mustParse(data string) map[rune]glyph {
 const (
 	scale    = 4.0 // pixels per font unit
 	penWidth = 7   // pixels
-	stepLen  = 20  // pixels of pen travel per animation step
+	bandPad  = 24  // between text and the top of the band, pixels
 	edge     = 48  // between text and Slide edge, pixels
 )
 
@@ -78,7 +78,7 @@ func strokes(text string, b image.Rectangle) [][]point {
 
 // Steps is the pen's path writing the time t on a Slide with bounds b, cut
 // into animation steps of about stepLen pixels of travel each.
-func Steps(t time.Time, b image.Rectangle) []Step {
+func Steps(t time.Time, b image.Rectangle, stepLen float64) []Step {
 	var out []Step
 	for _, s := range strokes(Phrase(t), b) {
 		cur := Step{s[0]}
@@ -168,4 +168,10 @@ func Area(b image.Rectangle) image.Rectangle {
 		}
 	}
 	return align(r.Inset(-penWidth)).Intersect(b)
+}
+
+// Band is a strip along the bottom of a Slide with bounds b, wide as the
+// Slide, that holds Area: the background for writing in chalk.
+func Band(b image.Rectangle) image.Rectangle {
+	return image.Rect(b.Min.X, Area(b).Min.Y-bandPad, b.Max.X, b.Max.Y).Intersect(b)
 }

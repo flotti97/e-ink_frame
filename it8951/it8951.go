@@ -57,7 +57,7 @@ type Mode uint16
 
 const (
 	ModeInit Mode = 0 // clears to white with heavy flashing
-	ModeDU   Mode = 1 // fast, black and white only
+	ModeDU   Mode = 1 // fast, black and white only; other pixels keep their gray
 	ModeGC16 Mode = 2 // 16 gray levels, flashes
 	ModeGL16 Mode = 3 // 16 gray levels, no flash, more ghosting
 	ModeA2   Mode = 6 // fastest, but only between black and white: leaves grays as they are
@@ -123,17 +123,11 @@ func (p *Panel) Show(s *image.Gray) error {
 	return p.Sleep()
 }
 
-// Update refreshes area r of the panel from s without a flash: in DU when
-// quick, which only reaches black and white but leaves the other pixels in r
-// alone, else in GL16. r's left edge and width must be multiples of 4. The
-// panel stays awake until Sleep.
-func (p *Panel) Update(s *image.Gray, r image.Rectangle, quick bool) error {
+// Update refreshes area r of the panel from s with mode m. r's left edge and
+// width must be multiples of 4. The panel stays awake until Sleep.
+func (p *Panel) Update(s *image.Gray, r image.Rectangle, m Mode) error {
 	if err := p.Load(s, r); err != nil {
 		return err
-	}
-	m := ModeGL16
-	if quick {
-		m = ModeDU
 	}
 	return p.Display(r, m)
 }

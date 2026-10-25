@@ -1,6 +1,6 @@
 // Package web serves the upload page: a gallery of the stored Images with an
-// upload form, and on each Image a "show now" and a delete button. The Slide
-// on the panel is highlighted.
+// upload form, the Clock's settings, and on each Image a "show now" and a
+// delete button. The Slide on the panel is highlighted.
 package web
 
 import (
@@ -11,9 +11,11 @@ import (
 	"log"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/flotti97/e-ink_frame/library"
+	"github.com/flotti97/e-ink_frame/slideshow"
 )
 
 // maxUpload caps one upload request. Phone photos are a few MB each.
@@ -28,6 +30,8 @@ var page = template.Must(template.New("page").Parse(pageHTML))
 type Slideshow interface {
 	ShowNow(id string) error
 	Current() string
+	ClockSettings() slideshow.ClockSettings
+	SetClock(c slideshow.ClockSettings) error
 }
 
 type server struct {
@@ -43,6 +47,7 @@ func New(lib *library.Library, show Slideshow) http.Handler {
 	mux.HandleFunc("POST /upload", s.upload)
 	mux.HandleFunc("POST /delete/{id}", s.delete)
 	mux.HandleFunc("POST /show/{id}", s.showNow)
+	mux.HandleFunc("POST /clock", s.setClock)
 	mux.HandleFunc("GET /slides/{file}", s.slide)
 	// There is no login, so refuse form posts that other websites make the
 	// browser send to the Frame.
@@ -110,6 +115,24 @@ func (s *server) showNow(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) setClock(w http.ResponseWriter, r *http.Request) {
+	step, err := strconv.Atoi(r.FormValue("step"))
+	if err != nil {
+		s.render(w, http.StatusBadRequest, []string{"Step size must be a whole number of pixels."})
+		return
+	}
+	c := slideshow.ClockSettings{On: r.FormValue("on") == "true", Step: step, Style: r.FormValue("style")}
+	if err := c.Validate(); err != nil {
+		s.render(w, http.StatusBadRequest, []string{"Clock settings not saved: " + err.Error()})
+		return
+	}
+	if err := s.show.SetClock(c); err != nil {
+		s.render(w, http.StatusInternalServerError, []string{"Saving the clock settings failed: " + err.Error()})
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 func (s *server) slide(w http.ResponseWriter, r *http.Request) {
 	id, ok := strings.CutSuffix(r.PathValue("file"), ".png")
 	entries, err := s.lib.List()
@@ -136,7 +159,10 @@ func (s *server) render(w http.ResponseWriter, status int, problems []string) {
 		Problems []string
 		Entries  []library.Entry
 		Current  string
-	}{problems, entries, s.show.Current()}); err != nil {
+		Clock    slideshow.ClockSettings
+		MinStep  int
+		MaxStep  int
+	}{problems, entries, s.show.Current(), s.show.ClockSettings(), slideshow.MinClockStep, slideshow.MaxClockStep}); err != nil {
 		log.Printf("web: rendering page: %v", err)
 	}
 }

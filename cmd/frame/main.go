@@ -73,14 +73,15 @@ func run(configPath, fakePanel string, logger *log.Logger) error {
 	defer stop()
 
 	show := &slideshow.Slideshow{
-		Library:   lib,
-		Panel:     panel,
-		Shuffle:   shuffle,
-		StatePath: cfg.State,
-		Interval:  cfg.Interval,
-		Rand:      rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
-		Log:       logger,
-		Clock:     cfg.Clock,
+		Library:    lib,
+		Panel:      panel,
+		Shuffle:    shuffle,
+		StatePath:  cfg.State,
+		Interval:   cfg.Interval,
+		Rand:       rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
+		Log:        logger,
+		Clock:      cfg.Clock,
+		ConfigPath: configPath,
 	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,

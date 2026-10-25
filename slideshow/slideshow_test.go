@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/flotti97/e-ink_frame/clock"
+	"github.com/flotti97/e-ink_frame/it8951"
 	"github.com/flotti97/e-ink_frame/library"
 	"github.com/flotti97/e-ink_frame/slide"
 )
@@ -54,7 +55,7 @@ func (p *recordingPanel) Show(s *image.Gray) error {
 	return nil
 }
 
-func (p *recordingPanel) Update(_ *image.Gray, r image.Rectangle, _ bool) error {
+func (p *recordingPanel) Update(_ *image.Gray, r image.Rectangle, _ it8951.Mode) error {
 	p.updates = append(p.updates, r)
 	return nil
 }
@@ -314,8 +315,8 @@ func (p *blockingPanel) Show(*image.Gray) error {
 	return nil
 }
 
-func (p *blockingPanel) Update(*image.Gray, image.Rectangle, bool) error { return nil }
-func (p *blockingPanel) Sleep() error                                    { return nil }
+func (p *blockingPanel) Update(*image.Gray, image.Rectangle, it8951.Mode) error { return nil }
+func (p *blockingPanel) Sleep() error                                           { return nil }
 
 func TestCurrentAnswersDuringASlowRefresh(t *testing.T) {
 	show, _ := newShow(t, 3, nil)
@@ -364,9 +365,9 @@ func (p *framePanel) Show(s *image.Gray) error {
 	return nil
 }
 
-func (p *framePanel) Update(s *image.Gray, r image.Rectangle, quick bool) error {
+func (p *framePanel) Update(s *image.Gray, r image.Rectangle, m it8951.Mode) error {
 	draw.Draw(p.img, r, s, r.Min, draw.Src)
-	if quick {
+	if m != it8951.ModeGL16 {
 		p.quick++
 	}
 	p.asleep = false
@@ -391,7 +392,7 @@ func TestClockIsWrittenOntoTheSlideAndRewrittenOnTick(t *testing.T) {
 		Library: lib, Panel: panel, Shuffle: &Shuffle{},
 		StatePath: filepath.Join(t.TempDir(), "shuffle.json"),
 		Rand:      newRand(), Log: log.New(io.Discard, "", 0),
-		Clock: true, Now: func() time.Time { return now },
+		Clock: inkClock, Now: func() time.Time { return now },
 	}
 	if err := show.Tick(); err != nil {
 		t.Fatal(err)
@@ -406,7 +407,7 @@ func TestClockIsWrittenOntoTheSlideAndRewrittenOnTick(t *testing.T) {
 	written := func() *image.Gray {
 		w := image.NewGray(s.Bounds())
 		copy(w.Pix, s.Pix)
-		for _, st := range clock.Steps(now, w.Bounds()) {
+		for _, st := range clock.Steps(now, w.Bounds(), 20) {
 			st.Draw(w, clock.Ink(s, clock.Area(s.Bounds())))
 		}
 		return w
@@ -414,7 +415,7 @@ func TestClockIsWrittenOntoTheSlideAndRewrittenOnTick(t *testing.T) {
 	if !bytes.Equal(panel.img.Pix, written().Pix) {
 		t.Fatal("panel does not show the Slide with the time written on it")
 	}
-	if steps := len(clock.Steps(now, s.Bounds())); panel.quick != steps || !panel.asleep {
+	if steps := len(clock.Steps(now, s.Bounds(), 20)); panel.quick != steps || !panel.asleep {
 		t.Errorf("%d quick Updates for %d steps, asleep %v", panel.quick, steps, panel.asleep)
 	}
 
@@ -424,5 +425,123 @@ func TestClockIsWrittenOntoTheSlideAndRewrittenOnTick(t *testing.T) {
 	}
 	if !bytes.Equal(panel.img.Pix, written().Pix) {
 		t.Error("Tick did not replace the time")
+	}
+}
+
+func TestSetClockRubsOutAndRewritesTheTime(t *testing.T) {
+	lib := fakeLibrary{dir: t.TempDir()}
+	s := image.NewGray(image.Rect(0, 0, 1872, 1404))
+	var b bytes.Buffer
+	png.Encode(&b, s)
+	os.WriteFile(lib.SlidePath("a"), b.Bytes(), 0o644)
+	config := filepath.Join(t.TempDir(), "frame.json")
+	os.WriteFile(config, []byte(`{"vcom": -1.58}`), 0o644)
+
+	panel := &framePanel{}
+	show := &Slideshow{
+		Library: lib, Panel: panel, Shuffle: &Shuffle{},
+		StatePath: filepath.Join(t.TempDir(), "shuffle.json"),
+		Rand:      newRand(), Log: log.New(io.Discard, "", 0),
+		Clock: inkClock, ConfigPath: config,
+	}
+	if err := show.Step(); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(panel.img.Pix, s.Pix) {
+		t.Fatal("no time written")
+	}
+
+	if err := show.SetClock(ClockSettings{Step: 20, Style: StyleInk}); err != nil {
+		t.Fatal(err)
+	}
+	if show.ClockOn() {
+		t.Error("Clock still on")
+	}
+	if err := show.Tick(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(panel.img.Pix, s.Pix) || !panel.asleep {
+		t.Error("time not rubbed out")
+	}
+	if c, err := LoadConfig(config); err != nil || c.Clock.On || c.VCOM != -1.58 {
+		t.Errorf("saved config = %+v, %v", c, err)
+	}
+
+	quick := panel.quick
+	if err := show.Tick(); err != nil {
+		t.Fatal(err)
+	}
+	if err := show.SetClock(inkClock); err != nil {
+		t.Fatal(err)
+	}
+	if err := show.Tick(); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(panel.img.Pix, s.Pix) || panel.quick == quick {
+		t.Error("time not written again")
+	}
+}
+
+func TestSetClockOnAfterARestartShowsTheSlideAgain(t *testing.T) {
+	show, panel := newShow(t, 3, nil)
+	show.Shuffle.Current = "b"
+	show.setOnPanel("b")
+	if err := show.SetClock(inkClock); err != nil {
+		t.Fatal(err)
+	}
+	// The fake Slides are too small to write on; only the full Refresh counts.
+	show.Tick()
+	if len(panel.shown) != 1 || panel.shown[0] != 1 {
+		t.Errorf("panel shown %v, want Slide 1 again", panel.shown)
+	}
+}
+
+var inkClock = ClockSettings{On: true, Step: 20, Style: StyleInk}
+
+func TestChalkWritesWhiteOnABlackBand(t *testing.T) {
+	lib := fakeLibrary{dir: t.TempDir()}
+	s := image.NewGray(image.Rect(0, 0, 1872, 1404))
+	for i := range s.Pix {
+		s.Pix[i] = 0xC0
+	}
+	var b bytes.Buffer
+	png.Encode(&b, s)
+	os.WriteFile(lib.SlidePath("a"), b.Bytes(), 0o644)
+	panel := &framePanel{}
+	show := &Slideshow{
+		Library: lib, Panel: panel, Shuffle: &Shuffle{},
+		StatePath: filepath.Join(t.TempDir(), "shuffle.json"),
+		Rand:      newRand(), Log: log.New(io.Discard, "", 0),
+		Clock: ClockSettings{On: true, Step: 20, Style: StyleChalk},
+	}
+	if err := show.Step(); err != nil {
+		t.Fatal(err)
+	}
+	band := clock.Band(s.Bounds())
+	var white int
+	for y := range s.Bounds().Dy() {
+		for x := range s.Bounds().Dx() {
+			v := panel.img.GrayAt(x, y).Y
+			switch {
+			case !image.Pt(x, y).In(band) && v != 0xC0:
+				t.Fatalf("pixel %d,%d outside the band changed", x, y)
+			case image.Pt(x, y).In(band) && v != 0 && v != 0xFF:
+				t.Fatalf("pixel %d,%d in the band is gray", x, y)
+			case v == 0xFF:
+				white++
+			}
+		}
+	}
+	if white == 0 {
+		t.Error("nothing written in white")
+	}
+}
+
+func TestSetClockRejectsBadSettings(t *testing.T) {
+	show, _ := newShow(t, 1, nil)
+	for _, c := range []ClockSettings{{Step: 0, Style: StyleInk}, {Step: 20, Style: "crayon"}} {
+		if err := show.SetClock(c); err == nil {
+			t.Errorf("%+v accepted", c)
+		}
 	}
 }

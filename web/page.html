@@ -27,6 +27,11 @@
   .meta { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 10px; }
   .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 0.9rem; }
   .empty { color: var(--muted); margin-top: 24px; }
+  form.clock { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 12px; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  form.clock label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  form.clock input[type=number], form.clock select { font: inherit; padding: 4px 6px; width: 5.5em; }
+  form.clock select { width: auto; }
+  form.clock button { padding: 6px 12px; margin-left: auto; }
 </style>
 </head>
 <body>
@@ -35,6 +40,17 @@
   <form class="upload" action="/upload" method="post" enctype="multipart/form-data">
     <input type="file" name="images" accept="image/jpeg,image/png" multiple required>
     <button type="submit">Upload</button>
+  </form>
+  <form class="clock" action="/clock" method="post">
+    <label><input type="checkbox" name="on" value="true"{{if .Clock.On}} checked{{end}}> Ghost clock</label>
+    <label>Step <input type="number" name="step" min="{{.MinStep}}" max="{{.MaxStep}}" value="{{.Clock.Step}}" required> px</label>
+    <label>Style
+      <select name="style">
+        <option value="ink"{{if eq .Clock.Style "ink"}} selected{{end}}>Ink on the photo</option>
+        <option value="chalk"{{if eq .Clock.Style "chalk"}} selected{{end}}>Chalk on a black band</option>
+      </select>
+    </label>
+    <button type="submit">Save</button>
   </form>
   {{with .Problems}}
   <div class="problems" role="alert"><ul>{{range .}}<li>{{.}}</li>{{end}}</ul></div>

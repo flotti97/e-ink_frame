@@ -76,14 +76,46 @@ func TestConfigClockIsOnUnlessTurnedOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Clock {
-		t.Error("clock off by default")
+	if c.Clock != (ClockSettings{On: true, Step: 20, Style: StyleInk}) {
+		t.Errorf("default clock = %+v", c.Clock)
 	}
 	c, err = LoadConfig(writeConfig(t, `{"clock": false}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Clock {
+	if c.Clock.On {
 		t.Error(`"clock": false ignored`)
+	}
+	c, err = LoadConfig(writeConfig(t, `{"clock_step": 40, "clock_style": "chalk"}`))
+	if err != nil || c.Clock.Step != 40 || c.Clock.Style != StyleChalk {
+		t.Errorf("clock = %+v, %v", c.Clock, err)
+	}
+	for _, bad := range []string{`{"clock_step": 0}`, `{"clock_style": "crayon"}`} {
+		if _, err := LoadConfig(writeConfig(t, bad)); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
+func TestSaveClockKeepsTheOtherSettings(t *testing.T) {
+	path := writeConfig(t, `{"interval": "10m", "vcom": -1.58}`)
+	want := ClockSettings{Step: 40, Style: StyleChalk}
+	if err := SaveClock(path, want); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Clock != want || c.Interval != 10*time.Minute || c.VCOM != -1.58 {
+		t.Errorf("config after saving = %+v", c)
+	}
+
+	missing := filepath.Join(t.TempDir(), "frame.json")
+	if err := SaveClock(missing, DefaultConfig.Clock); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := LoadConfig(missing); err != nil || c.Clock != DefaultConfig.Clock {
+		t.Errorf("new config = %+v, %v", c, err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/png"
 	"log"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/flotti97/e-ink_frame/clock"
 	"github.com/flotti97/e-ink_frame/internal/atomicfile"
+	"github.com/flotti97/e-ink_frame/it8951"
 	"github.com/flotti97/e-ink_frame/library"
 )
 
@@ -26,8 +28,8 @@ type Panel interface {
 	// Show puts s up with one full Refresh.
 	Show(s *image.Gray) error
 	// Update refreshes only area r from s, which otherwise matches what is
-	// on the panel. Quick Updates are fast but only reach black and white.
-	Update(s *image.Gray, r image.Rectangle, quick bool) error
+	// on the panel, with mode m.
+	Update(s *image.Gray, r image.Rectangle, m it8951.Mode) error
 	// Sleep powers the panel down after Updates.
 	Sleep() error
 }
@@ -48,7 +50,7 @@ func (p FakePanel) Show(s *image.Gray) error {
 }
 
 // Update writes all of s to p.Path.
-func (p FakePanel) Update(s *image.Gray, _ image.Rectangle, _ bool) error {
+func (p FakePanel) Update(s *image.Gray, _ image.Rectangle, _ it8951.Mode) error {
 	return p.Show(s)
 }
 
@@ -71,8 +73,11 @@ type Slideshow struct {
 	Rand      *rand.Rand
 	Log       *log.Logger
 	// Clock writes the time in words onto every Slide, stroke by stroke with
-	// partial Refreshes, and rewrites it every five minutes.
-	Clock bool
+	// partial Refreshes, and rewrites it every five minutes. Set it before
+	// Run; afterwards use SetClock.
+	Clock ClockSettings
+	// ConfigPath is the config file SetClock saves to; "" saves nothing.
+	ConfigPath string
 
 	// Now is the time the Clock shows. Nil means time.Now.
 	Now func() time.Time
@@ -82,11 +87,13 @@ type Slideshow struct {
 
 	refresh sync.Mutex  // one Refresh at a time; guards the fields below
 	clean   *image.Gray // the Slide on the panel, without the Clock
+	inked   bool        // the Clock is written on the panel
 
-	mu          sync.Mutex // guards the fields below; never held during a Refresh
-	onPanel     string     // ID of the Slide the panel shows
-	manual      uint64     // counts ShowNow Refreshes
-	restartWait func()     // cuts the running wait short
+	mu          sync.Mutex    // guards the fields below; never held during a Refresh
+	onPanel     string        // ID of the Slide the panel shows
+	manual      uint64        // counts ShowNow Refreshes
+	restartWait func()        // cuts the running wait short
+	clockSet    chan struct{} // tells runClock that SetClock was called
 }
 
 // Run shows the next Slide every Interval until ctx is done. Problems with a
@@ -104,7 +111,7 @@ func (s *Slideshow) Run(ctx context.Context) error {
 		// The panel's clock went stale while the Frame was down. Partial
 		// Refreshes can't fix it yet: the controller was reset and takes the
 		// panel to be white, so the Slide goes up again with a full one.
-		if s.Clock {
+		if s.ClockOn() {
 			if err := s.show(s.Shuffle.Current); err != nil {
 				s.Log.Print(err)
 			}
@@ -117,9 +124,10 @@ func (s *Slideshow) Run(ctx context.Context) error {
 			s.Log.Print(err)
 		}
 	}
-	if s.Clock {
-		go s.runClock(ctx)
-	}
+	s.mu.Lock()
+	s.clockSet = make(chan struct{}, 1)
+	s.mu.Unlock()
+	go s.runClock(ctx)
 	for {
 		gen, err := s.wait(ctx)
 		if err != nil {
@@ -131,11 +139,18 @@ func (s *Slideshow) Run(ctx context.Context) error {
 	}
 }
 
-// runClock updates the Clock at every five-minute mark until ctx is done.
+// runClock updates the Clock at every five-minute mark, and when it is
+// turned on or off, until ctx is done.
 func (s *Slideshow) runClock(ctx context.Context) {
 	for {
-		if sleep(ctx, time.Until(clock.Next(s.now()))) != nil {
+		t := time.NewTimer(time.Until(clock.Next(s.now())))
+		select {
+		case <-ctx.Done():
+			t.Stop()
 			return
+		case <-t.C:
+		case <-s.clockSet:
+			t.Stop()
 		}
 		if err := s.Tick(); err != nil {
 			s.Log.Printf("updating clock: %v", err)
@@ -143,40 +158,101 @@ func (s *Slideshow) runClock(ctx context.Context) {
 	}
 }
 
-// Tick rubs out the Clock on the panel and writes the current time. It does
-// nothing until the Slide on the panel is known.
+// ClockSettings returns how the Clock writes. It never waits for a Refresh.
+func (s *Slideshow) ClockSettings() ClockSettings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Clock
+}
+
+// ClockOn reports whether the Clock is on. It never waits for a Refresh.
+func (s *Slideshow) ClockOn() bool {
+	return s.ClockSettings().On
+}
+
+// SetClock changes how the Clock writes and saves that to ConfigPath. The
+// panel follows shortly after, in the background, rewriting the time.
+func (s *Slideshow) SetClock(c ClockSettings) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Clock = c
+	if s.clockSet != nil {
+		select {
+		case s.clockSet <- struct{}{}:
+		default: // already pending
+		}
+	}
+	if s.ConfigPath == "" {
+		return nil
+	}
+	return SaveClock(s.ConfigPath, c)
+}
+
+// Tick brings the Clock on the panel up to date: it rubs out the old time
+// and, while the Clock is on, writes the current one.
 func (s *Slideshow) Tick() error {
 	s.refresh.Lock()
 	defer s.refresh.Unlock()
-	if !s.Clock || s.clean == nil {
-		return nil
+	switch {
+	case s.ClockOn() && s.clean != nil:
+		return s.write(s.inked)
+	case s.ClockOn() && s.Current() != "":
+		// Turned on after a restart: the Slide must go up again first, as
+		// the controller doesn't know what the panel shows.
+		return s.show(s.Current())
+	case !s.ClockOn() && s.inked:
+		return s.erase()
 	}
-	return s.write(true)
+	return nil
+}
+
+// erase puts the clean Slide back over the Clock, band and all.
+func (s *Slideshow) erase() error {
+	err := s.Panel.Update(s.clean, clock.Band(s.clean.Bounds()), it8951.ModeGL16)
+	if serr := s.Panel.Sleep(); err == nil {
+		err = serr
+	}
+	if err == nil {
+		s.inked = false
+	}
+	return err
 }
 
 // write writes the time onto the clean Slide on the panel, one pen Step per
-// quick Update, after first rubbing out the old time when erase is set. A
-// final slow Update of the whole Clock area clears the quick Updates' ghosts.
+// fast Update, after first rubbing out the old time when erase is set. In
+// chalk a black band goes up first, since A2 only changes black and white
+// pixels. A final slow Update clears the fast Updates' ghosts.
 func (s *Slideshow) write(erase bool) error {
+	set := s.ClockSettings()
 	sl := image.NewGray(s.clean.Bounds())
 	copy(sl.Pix, s.clean.Pix)
-	area := clock.Area(sl.Bounds())
+	// The band covers the Clock in either style, so refreshing it rubs
+	// out whatever was written before.
+	band := clock.Band(sl.Bounds())
+	ink, mode := clock.Ink(sl, clock.Area(sl.Bounds())), it8951.ModeDU
+	if set.Style == StyleChalk {
+		draw.Draw(sl, band, image.Black, image.Point{}, draw.Src)
+		ink, mode, erase = color.Gray{0xFF}, it8951.ModeA2, true
+	}
+	s.inked = true
 	err := func() error {
 		if erase {
-			if err := s.Panel.Update(sl, area, false); err != nil {
+			if err := s.Panel.Update(sl, band, it8951.ModeGL16); err != nil {
 				return err
 			}
 		}
-		ink := clock.Ink(sl, area)
 		start := time.Now()
-		steps := clock.Steps(s.now(), sl.Bounds())
+		steps := clock.Steps(s.now(), sl.Bounds(), float64(set.Step))
 		for _, st := range steps {
-			if err := s.Panel.Update(sl, st.Draw(sl, ink), true); err != nil {
+			if err := s.Panel.Update(sl, st.Draw(sl, ink), mode); err != nil {
 				return err
 			}
 		}
-		s.Log.Printf("clock: wrote %q in %d steps in %s", clock.Phrase(s.now()), len(steps), time.Since(start).Round(time.Second))
-		return s.Panel.Update(sl, area, false)
+		s.Log.Printf("clock: wrote %q in %s, %d steps in %s", clock.Phrase(s.now()), set.Style, len(steps), time.Since(start).Round(time.Second))
+		return s.Panel.Update(sl, band, it8951.ModeGL16)
 	}()
 	if serr := s.Panel.Sleep(); err == nil {
 		err = serr
@@ -333,8 +409,9 @@ func (s *Slideshow) show(id string) error {
 		return fmt.Errorf("showing Slide %s: %w", id, err)
 	}
 	s.clean = sl
+	s.inked = false
 	s.setOnPanel(id)
-	if s.Clock {
+	if s.ClockOn() {
 		if err := s.write(false); err != nil {
 			s.Log.Printf("writing clock: %v", err)
 		}
