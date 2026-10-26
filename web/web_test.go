@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/flotti97/e-ink_frame/library"
+	"github.com/flotti97/e-ink_frame/slide"
 	"github.com/flotti97/e-ink_frame/slideshow"
 )
 
@@ -335,4 +337,77 @@ func postForm(h http.Handler, path, form string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+func TestUploadAskingForJSONReportsProblemsAsJSON(t *testing.T) {
+	_, h := newServer(t)
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+		code int
+	}{{"good.png", pngBytes(t, 90), http.StatusNoContent}, {"notes.txt", []byte("hello"), http.StatusBadRequest}} {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		part, _ := mw.CreateFormFile("images", tc.name)
+		part.Write(tc.data)
+		mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/upload", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.Header.Set("Accept", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != tc.code {
+			t.Errorf("%s answered %d, want %d", tc.name, rec.Code, tc.code)
+		}
+		if tc.code == http.StatusBadRequest {
+			var got struct{ Problems []string }
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Problems) != 1 || !strings.Contains(got.Problems[0], tc.name) {
+				t.Errorf("%s answered %q, want JSON problems naming the file", tc.name, rec.Body.String())
+			}
+		}
+	}
+}
+
+func TestUploadUsesTheBrowsersSlideOrRendersItsOwn(t *testing.T) {
+	lib, h := newServer(t)
+	var good bytes.Buffer
+	png.Encode(&good, slide.Render(image.NewGray(image.Rect(0, 0, 40, 30))))
+
+	for _, tc := range []struct {
+		name   string
+		slide  []byte
+		wantAs []byte // nil: whatever the Frame renders
+	}{{"browser.png", good.Bytes(), good.Bytes()}, {"forged.png", []byte("not a Slide"), nil}} {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		part, _ := mw.CreateFormFile("images", tc.name)
+		part.Write(pngBytes(t, uint8(len(tc.name))))
+		part, _ = mw.CreateFormFile("slide", "slide.png")
+		part.Write(tc.slide)
+		mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/upload", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.Header.Set("Accept", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("%s answered %d %s", tc.name, rec.Code, rec.Body)
+		}
+	}
+
+	entries, _ := lib.List()
+	if len(entries) != 2 {
+		t.Fatalf("library holds %d Images, want 2", len(entries))
+	}
+	for _, e := range entries {
+		got, _ := os.ReadFile(lib.SlidePath(e.ID))
+		if err := slide.Check(got); err != nil {
+			t.Errorf("%s: stored Slide fails the check: %v", e.Name, err)
+		}
+		if e.Name == "browser.png" && !bytes.Equal(got, good.Bytes()) {
+			t.Errorf("browser.png: the browser's Slide was not kept")
+		}
+	}
 }

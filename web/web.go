@@ -4,11 +4,14 @@
 package web
 
 import (
-	_ "embed"
+	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"slices"
 	"strconv"
@@ -23,6 +26,14 @@ const maxUpload = 200 << 20
 
 //go:embed page.html
 var pageHTML string
+
+// static holds the page's script for rendering Slides in the browser, and the
+// WASM build of the slide package it runs, which go generate puts there.
+// Without the WASM build the page leaves rendering to the Frame.
+//
+//go:generate sh -c "GOOS=js GOARCH=wasm go build -trimpath -ldflags=-s -o static/slide.wasm ../cmd/slidewasm && cp \"$(go env GOROOT)/lib/wasm/wasm_exec.js\" static/"
+//go:embed static
+var static embed.FS
 
 var page = template.Must(template.New("page").Parse(pageHTML))
 
@@ -49,6 +60,7 @@ func New(lib *library.Library, show Slideshow) http.Handler {
 	mux.HandleFunc("POST /show/{id}", s.showNow)
 	mux.HandleFunc("POST /clock", s.setClock)
 	mux.HandleFunc("GET /slides/{file}", s.slide)
+	mux.Handle("GET /static/", http.FileServerFS(static))
 	// There is no login, so refuse form posts that other websites make the
 	// browser send to the Frame.
 	return http.NewCrossOriginProtection().Handler(mux)
@@ -58,17 +70,35 @@ func (s *server) gallery(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, nil)
 }
 
+// upload adds the posted Images. The page's script posts one file at a time
+// and asks for JSON, so it can show progress and per-file errors without
+// leaving the page; a plain form post gets the page back. The script also
+// sends the Slide it rendered, if it could; a Slide that fails the check is
+// rendered again here.
 func (s *server) upload(w http.ResponseWriter, r *http.Request) {
+	wantJSON := strings.Contains(r.Header.Get("Accept"), "application/json")
+	fail := func(problems []string) {
+		if wantJSON {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(struct {
+				Problems []string `json:"problems"`
+			}{problems})
+			return
+		}
+		s.render(w, http.StatusBadRequest, problems)
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxUpload)
 	if err := r.ParseMultipartForm(8 << 20); err != nil { // the rest spills to disk; the Pi has 512 MB
-		s.render(w, http.StatusBadRequest, []string{"Upload failed: " + err.Error()})
+		fail([]string{"Upload failed: " + err.Error()})
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
 
 	files := r.MultipartForm.File["images"]
 	if len(files) == 0 {
-		s.render(w, http.StatusBadRequest, []string{"Choose at least one JPEG or PNG Image."})
+		fail([]string{"Choose at least one JPEG or PNG Image."})
 		return
 	}
 	var problems []string
@@ -78,17 +108,49 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 			problems = append(problems, fmt.Sprintf("%s: %v", fh.Filename, err))
 			continue
 		}
-		_, err = s.lib.Add(fh.Filename, f)
+		_, err = s.add(fh.Filename, f, r.MultipartForm.File["slide"], len(files))
 		f.Close()
 		if err != nil {
 			problems = append(problems, err.Error())
 		}
 	}
-	if len(problems) > 0 {
-		s.render(w, http.StatusBadRequest, problems)
-		return
+	switch {
+	case len(problems) > 0:
+		fail(problems)
+	case wantJSON:
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// add stores one Image, with the Slide the browser rendered for it if there
+// is one; only a single-Image upload can carry one.
+func (s *server) add(name string, f io.ReadSeeker, slides []*multipart.FileHeader, images int) (library.Entry, error) {
+	if len(slides) == 1 && images == 1 {
+		e, err := s.addRendered(name, f, slides[0])
+		if err == nil {
+			return e, nil
+		}
+		log.Printf("web: rendering %s here, the browser's Slide won't do: %v", name, err)
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return library.Entry{}, fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	return s.lib.Add(name, f)
+}
+
+func (s *server) addRendered(name string, f io.Reader, fh *multipart.FileHeader) (library.Entry, error) {
+	sf, err := fh.Open()
+	if err != nil {
+		return library.Entry{}, err
+	}
+	defer sf.Close()
+	png, err := io.ReadAll(sf)
+	if err != nil {
+		return library.Entry{}, err
+	}
+	return s.lib.AddRendered(name, f, png)
 }
 
 func (s *server) delete(w http.ResponseWriter, r *http.Request) {

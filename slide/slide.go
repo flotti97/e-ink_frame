@@ -59,10 +59,54 @@ func Decode(r io.Reader) (image.Image, error) {
 	return img, nil
 }
 
+// CheckImage reports whether data looks like a JPEG or PNG Image Decode
+// could read, judging by its header only.
+func CheckImage(data []byte) error {
+	head := data[:min(len(data), len(pngMagic))]
+	var decode func(io.Reader) (image.Config, error)
+	var format string
+	switch {
+	case bytes.HasPrefix(head, jpegMagic):
+		decode, format = jpeg.DecodeConfig, "JPEG"
+	case bytes.HasPrefix(head, pngMagic):
+		decode, format = png.DecodeConfig, "PNG"
+	default:
+		return ErrUnsupported
+	}
+	if _, err := decode(bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("corrupt %s: %w", format, err)
+	}
+	return nil
+}
+
 // Render produces the Slide for img: a Width×Height image in 16 gray levels.
 func Render(img image.Image) *image.Gray {
 	crop := Crop(img, Width, Height)
 	scaled := image.NewRGBA(image.Rect(0, 0, Width, Height))
 	draw.CatmullRom.Scale(scaled, scaled.Bounds(), img, crop, draw.Src, nil)
 	return Tone(scaled)
+}
+
+// Check reports whether data is a finished Slide as PNG, such as one rendered
+// by the upload page in the browser: Width×Height, gray, and only the panel's
+// gray levels. It is far cheaper than rendering, so the Frame can trust a
+// Slide it didn't make.
+func Check(data []byte) error {
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("Slide is not a PNG: %w", err)
+	}
+	g, ok := img.(*image.Gray)
+	if !ok {
+		return errors.New("Slide is not grayscale")
+	}
+	if g.Bounds() != image.Rect(0, 0, Width, Height) {
+		return fmt.Errorf("Slide is %dx%d, want %dx%d", g.Bounds().Dx(), g.Bounds().Dy(), Width, Height)
+	}
+	for _, v := range g.Pix {
+		if v%levelStep != 0 {
+			return errors.New("Slide has grays the panel can't show")
+		}
+	}
+	return nil
 }

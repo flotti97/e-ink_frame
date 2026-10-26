@@ -31,6 +31,9 @@
   form.clock label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
   form.clock input[type=number], form.clock select { font: inherit; padding: 4px 6px; width: 5.5em; }
   form.clock select { width: auto; }
+  .status { margin: 16px 0 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  .status ul { margin: 0; padding-left: 20px; }
+  .status .bad { color: var(--bad); }
   form.clock button { padding: 6px 12px; margin-left: auto; }
 </style>
 </head>
@@ -41,6 +44,7 @@
     <input type="file" name="images" accept="image/jpeg,image/png" multiple required>
     <button type="submit">Upload</button>
   </form>
+  <div class="status" id="upload-status" aria-live="polite" hidden><ul></ul></div>
   <form class="clock" action="/clock" method="post">
     <label><input type="checkbox" name="on" value="true"{{if .Clock.On}} checked{{end}}> Ghost clock</label>
     <label>Step <input type="number" name="step" min="{{.MinStep}}" max="{{.MaxStep}}" value="{{.Clock.Step}}" required> px</label>
@@ -79,5 +83,91 @@
   <p class="empty">No Images yet. Upload a JPEG or PNG to start the Slideshow.</p>
   {{end}}
 </main>
+<script>
+// Upload one file at a time in the background, so the page stays usable, and
+// show how each one went. Each Slide is rendered here in the browser, in a
+// worker, so the Frame's small computer doesn't have to; if that can't run,
+// the Frame renders it.
+let worker;
+let nextId = 0;
+const waiting = new Map();
+function renderInBrowser(file) {
+  if (worker === null) return Promise.resolve({ unavailable: true });
+  if (!worker) {
+    worker = new Worker("/static/render-worker.js");
+    worker.onmessage = ({ data }) => { waiting.get(data.id)(data); waiting.delete(data.id); };
+    worker.onerror = () => {
+      worker = null;
+      for (const done of waiting.values()) done({ unavailable: true });
+      waiting.clear();
+    };
+  }
+  return file.arrayBuffer().then((buf) => new Promise((done) => {
+    const id = nextId++;
+    waiting.set(id, done);
+    worker.postMessage({ id, bytes: new Uint8Array(buf) }, [buf]);
+  }));
+}
+
+document.querySelector("form.upload").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.target;
+  const input = form.elements.images;
+  const button = form.querySelector("button");
+  const status = document.getElementById("upload-status");
+  const list = status.querySelector("ul");
+  const files = [...input.files];
+  list.replaceChildren();
+  status.hidden = false;
+  button.disabled = input.disabled = true;
+
+  let added = 0;
+  for (const [i, file] of files.entries()) {
+    const li = document.createElement("li");
+    li.textContent = `${file.name}: rendering (${i + 1} of ${files.length})…`;
+    list.append(li);
+    const body = new FormData();
+    body.append("images", file, file.name);
+    try {
+      const r = await renderInBrowser(file);
+      if (r.error) {
+        li.textContent = `${file.name}: ${r.error}`;
+        li.className = "bad";
+        continue;
+      }
+      if (r.slide) {
+        body.append("slide", new Blob([r.slide], { type: "image/png" }), "slide.png");
+        li.textContent = `${file.name}: uploading (${i + 1} of ${files.length})…`;
+      } else {
+        li.textContent = `${file.name}: uploading, the Frame renders it (${i + 1} of ${files.length})…`;
+      }
+      const res = await fetch(form.action, { method: "POST", body, headers: { Accept: "application/json" } });
+      if (res.ok) {
+        li.textContent = `${file.name}: added`;
+        added++;
+        continue;
+      }
+      let problems = [`${file.name}: the Frame answered ${res.status}`];
+      try { problems = (await res.json()).problems; } catch {}
+      li.textContent = problems.join("; ");
+    } catch (err) {
+      li.textContent = `${file.name}: could not reach the Frame (${err.message})`;
+    }
+    li.className = "bad";
+  }
+
+  button.disabled = input.disabled = false;
+  if (added === files.length) {
+    location.reload();
+  } else if (added > 0) {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = "/"; a.textContent = "Reload the gallery";
+    li.append(a, ` to see the ${added} added.`);
+    list.append(li);
+  }
+  form.reset();
+});
+</script>
 </body>
 </html>

@@ -12,6 +12,7 @@ cd "$(dirname "$0")/.."
 
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
+go generate ./web
 GOOS=linux GOARCH=arm GOARM=6 CGO_ENABLED=0 go build -o "$out/frame" ./cmd/frame
 
 ssh "$host" mkdir -p frame

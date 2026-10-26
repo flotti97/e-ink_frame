@@ -282,3 +282,31 @@ func TestConcurrentUse(t *testing.T) {
 		}
 	}
 }
+
+func TestAddRenderedStoresTheGivenSlide(t *testing.T) {
+	lib, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s bytes.Buffer
+	png.Encode(&s, slide.Render(testImage(200)))
+
+	e, err := lib.AddRendered("cat.jpg", bytes.NewReader(jpegBytes(t, 90)), s.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(lib.SlidePath(e.ID))
+	if !bytes.Equal(got, s.Bytes()) || e.Ext != "jpg" {
+		t.Errorf("stored Slide differs from the one given, or ext %q", e.Ext)
+	}
+
+	if _, err := lib.AddRendered("bad.png", bytes.NewReader(pngBytes(t, 10)), []byte("nope")); err == nil || !strings.Contains(err.Error(), "bad.png") {
+		t.Errorf("bad Slide gave %v, want an error naming the file", err)
+	}
+	if _, err := lib.AddRendered("notes.txt", strings.NewReader("hello"), s.Bytes()); !errors.Is(err, slide.ErrUnsupported) {
+		t.Errorf("text Image gave %v, want ErrUnsupported", err)
+	}
+	if entries, _ := lib.List(); len(entries) != 1 {
+		t.Errorf("library holds %d Images, want 1", len(entries))
+	}
+}

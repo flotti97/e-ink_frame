@@ -143,18 +143,38 @@ func (l *Library) Add(name string, r io.Reader) (Entry, error) {
 	if err != nil {
 		return Entry{}, fmt.Errorf("%s: %w", name, err)
 	}
+	// Rendering is slow, so it happens before taking the lock.
+	var s bytes.Buffer
+	if err := png.Encode(&s, slide.Render(img)); err != nil {
+		return Entry{}, fmt.Errorf("%s: %w", name, err)
+	}
+	return l.store(name, data, s.Bytes())
+}
 
+// AddRendered is Add for an Image whose Slide, as PNG, was rendered
+// elsewhere, such as in the browser. The Slide is checked, not trusted;
+// the Image itself is only checked to be a JPEG or PNG.
+func (l *Library) AddRendered(name string, r io.Reader, slidePNG []byte) (Entry, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return Entry{}, fmt.Errorf("%s: %w", name, err)
+	}
+	if err := slide.CheckImage(data); err != nil {
+		return Entry{}, fmt.Errorf("%s: %w", name, err)
+	}
+	if err := slide.Check(slidePNG); err != nil {
+		return Entry{}, fmt.Errorf("%s: %w", name, err)
+	}
+	return l.store(name, data, slidePNG)
+}
+
+// store keeps the Image data and its Slide s, unless the Image is there already.
+func (l *Library) store(name string, data, s []byte) (Entry, error) {
 	sum := sha256.Sum256(data)
 	id := hex.EncodeToString(sum[:8])
 	ext := "png"
 	if http.DetectContentType(data) == "image/jpeg" {
 		ext = "jpg"
-	}
-
-	// Rendering is slow, so it happens before taking the lock.
-	var s bytes.Buffer
-	if err := png.Encode(&s, slide.Render(img)); err != nil {
-		return Entry{}, fmt.Errorf("%s: %w", name, err)
 	}
 
 	unlock, err := l.lock()
@@ -172,7 +192,7 @@ func (l *Library) Add(name string, r io.Reader) (Entry, error) {
 		return Entry{}, err
 	}
 
-	if err := atomicfile.Write(l.SlidePath(id), s.Bytes()); err != nil {
+	if err := atomicfile.Write(l.SlidePath(id), s); err != nil {
 		return Entry{}, fmt.Errorf("%s: %w", name, err)
 	}
 	if err := atomicfile.Write(l.ImagePath(e), data); err != nil {

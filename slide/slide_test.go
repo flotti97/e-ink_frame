@@ -60,3 +60,29 @@ func TestDecodeRejectsUnsupportedAndCorruptFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckAcceptsRenderedSlidesOnly(t *testing.T) {
+	encode := func(img image.Image) []byte {
+		var b bytes.Buffer
+		if err := png.Encode(&b, img); err != nil {
+			t.Fatal(err)
+		}
+		return b.Bytes()
+	}
+	good := Render(image.NewRGBA(image.Rect(0, 0, 300, 200)))
+	if err := Check(encode(good)); err != nil {
+		t.Errorf("rendered Slide rejected: %v", err)
+	}
+	off := image.NewGray(good.Bounds())
+	off.Pix[0] = 3
+	for name, data := range map[string][]byte{
+		"not a PNG":  []byte("hello"),
+		"wrong size": encode(image.NewGray(image.Rect(0, 0, 10, 10))),
+		"colour":     encode(image.NewRGBA(good.Bounds())),
+		"off level":  encode(off),
+	} {
+		if Check(data) == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
