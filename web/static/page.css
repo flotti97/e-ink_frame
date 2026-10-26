@@ -80,3 +80,5 @@ button.sm { height: 32px; padding: 0 10px; }
 .actions { display: flex; gap: 4px; flex: none; }
 .actions form { margin: 0; }
 .empty { display: grid; place-items: center; padding: 48px 16px; text-align: center; color: var(--muted); border: 1.5px dashed var(--line); border-radius: var(--radius); }
+.location { display: flex; gap: 4px; margin: 0; }
+.location input { flex: 1; min-width: 0; font: italic 600 .95rem "Cormorant Garamond", Garamond, Georgia, serif; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); }

@@ -43,6 +43,7 @@ type Slideshow interface {
 	Current() string
 	ClockSettings() slideshow.ClockSettings
 	SetClock(c slideshow.ClockSettings) error
+	Retag(id string) error
 }
 
 type server struct {
@@ -59,6 +60,7 @@ func New(lib *library.Library, show Slideshow) http.Handler {
 	mux.HandleFunc("POST /delete/{id}", s.delete)
 	mux.HandleFunc("POST /show/{id}", s.showNow)
 	mux.HandleFunc("POST /clock", s.setClock)
+	mux.HandleFunc("POST /location/{id}", s.setLocation)
 	mux.HandleFunc("GET /slides/{file}", s.slide)
 	mux.Handle("GET /static/", http.FileServerFS(static))
 	// There is no login, so refuse form posts that other websites make the
@@ -195,6 +197,31 @@ func (s *server) setClock(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// maxLocation caps a location's length in characters, so it fits on the Slide.
+const maxLocation = 40
+
+func (s *server) setLocation(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	loc := strings.Join(strings.Fields(r.FormValue("location")), " ")
+	if n := len([]rune(loc)); n > maxLocation {
+		s.render(w, http.StatusBadRequest, []string{fmt.Sprintf("Location is %d characters, keep it to %d.", n, maxLocation)})
+		return
+	}
+	err := s.lib.SetLocation(id, loc)
+	switch {
+	case errors.Is(err, library.ErrNotFound):
+		s.render(w, http.StatusNotFound, []string{"That Image is gone."})
+		return
+	case err != nil:
+		s.render(w, http.StatusInternalServerError, []string{"Saving the location failed: " + err.Error()})
+		return
+	}
+	if err := s.show.Retag(id); err != nil {
+		log.Printf("web: retagging %s: %v", id, err)
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 func (s *server) slide(w http.ResponseWriter, r *http.Request) {
 	id, ok := strings.CutSuffix(r.PathValue("file"), ".png")
 	entries, err := s.lib.List()
@@ -224,7 +251,8 @@ func (s *server) render(w http.ResponseWriter, status int, problems []string) {
 		Clock    slideshow.ClockSettings
 		MinStep  int
 		MaxStep  int
-	}{problems, entries, s.show.Current(), s.show.ClockSettings(), slideshow.MinClockStep, slideshow.MaxClockStep}); err != nil {
+		MaxLoc   int
+	}{problems, entries, s.show.Current(), s.show.ClockSettings(), slideshow.MinClockStep, slideshow.MaxClockStep, maxLocation}); err != nil {
 		log.Printf("web: rendering page: %v", err)
 	}
 }

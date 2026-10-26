@@ -21,6 +21,7 @@ import (
 	"github.com/flotti97/e-ink_frame/internal/atomicfile"
 	"github.com/flotti97/e-ink_frame/it8951"
 	"github.com/flotti97/e-ink_frame/library"
+	"github.com/flotti97/e-ink_frame/tag"
 )
 
 // Panel shows Slides on the e-paper panel.
@@ -394,6 +395,30 @@ func (s *Slideshow) ids() ([]string, error) {
 	return ids, nil
 }
 
+// Retag shows the Slide with this ID again if it is on the panel, so a
+// changed location appears.
+func (s *Slideshow) Retag(id string) error {
+	s.refresh.Lock()
+	defer s.refresh.Unlock()
+	if s.Current() != id {
+		return nil
+	}
+	return s.show(id)
+}
+
+func (s *Slideshow) location(id string) string {
+	entries, err := s.Library.List()
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.ID == id {
+			return e.Location
+		}
+	}
+	return ""
+}
+
 // show saves the Shuffle and does the Refresh. The Shuffle is saved first, so
 // a Slide that can't be shown still counts and the Slideshow moves past it.
 func (s *Slideshow) show(id string) error {
@@ -404,6 +429,7 @@ func (s *Slideshow) show(id string) error {
 	if err != nil {
 		return fmt.Errorf("Slide %s: %w", id, err)
 	}
+	tag.Draw(sl, s.location(id))
 	if err := s.Panel.Show(sl); err != nil {
 		s.clean = nil
 		return fmt.Errorf("showing Slide %s: %w", id, err)

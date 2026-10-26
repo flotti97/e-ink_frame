@@ -52,6 +52,10 @@
       <img src="/slides/{{.ID}}.png" alt="{{.Name}}" loading="lazy">
       <div class="meta">
         <span class="name" title="{{.Name}}">{{.Name}}</span>
+        <form class="location" action="/location/{{.ID}}" method="post">
+          <input type="text" name="location" value="{{.Location}}" maxlength="{{$.MaxLoc}}" placeholder="Add a location…" aria-label="Location of {{.Name}}">
+          <button class="outline sm" type="submit">Tag</button>
+        </form>
         <div class="actions">
           <form action="/show/{{.ID}}" method="post">
             <button class="outline sm" type="submit">Show now</button>

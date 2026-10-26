@@ -310,3 +310,21 @@ func TestAddRenderedStoresTheGivenSlide(t *testing.T) {
 		t.Errorf("library holds %d Images, want 1", len(entries))
 	}
 }
+
+func TestSetLocation(t *testing.T) {
+	l := open(t)
+	e, err := l.Add("a.png", bytes.NewReader(pngBytes(t, 0x80)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.SetLocation(e.ID, "Lisbon"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := l.List()
+	if len(got) != 1 || got[0].Location != "Lisbon" {
+		t.Fatalf("got %+v", got)
+	}
+	if err := l.SetLocation("nope", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown ID: %v", err)
+	}
+}

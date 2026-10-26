@@ -29,6 +29,8 @@ type fakeSlideshow struct {
 	clockErr error
 }
 
+func (f *fakeSlideshow) Retag(string) error { return nil }
+
 func (f *fakeSlideshow) ClockSettings() slideshow.ClockSettings { return f.clock }
 
 func (f *fakeSlideshow) SetClock(c slideshow.ClockSettings) error {

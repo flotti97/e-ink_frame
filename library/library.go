@@ -39,6 +39,8 @@ type Entry struct {
 	Name  string    `json:"name"` // file name it was added under
 	Ext   string    `json:"ext"`  // "jpg" or "png"
 	Added time.Time `json:"added"`
+	// Location is where the Image was taken, written onto its Slide; "" for none.
+	Location string `json:"location,omitempty"`
 }
 
 // Library is a directory of Images and their Slides. It is safe for
@@ -251,6 +253,26 @@ func (l *Library) Delete(id string) error {
 		}
 	}
 	return nil
+}
+
+// SetLocation sets where the Image with this ID was taken.
+func (l *Library) SetLocation(id, location string) error {
+	unlock, err := l.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	e, err := l.get(id)
+	if err != nil {
+		return err
+	}
+	e.Location = location
+	meta, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	return atomicfile.Write(l.entryPath(id), meta)
 }
 
 func (l *Library) get(id string) (Entry, error) {
