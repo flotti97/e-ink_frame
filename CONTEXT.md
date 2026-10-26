@@ -2,6 +2,10 @@
 
 A picture frame built around an e-paper panel that rotates through a collection of photos, slowly and without a backlight.
 
+## Hardware
+
+Raspberry Pi zero W. ssh pi@192.168.1.74
+
 ## Language
 
 **Frame**:
