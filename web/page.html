@@ -49,21 +49,23 @@
     {{range .Entries}}
     <li{{if eq .ID $.Current}} aria-current="true"{{end}}>
       {{if eq .ID $.Current}}<span class="badge">On the Frame now</span>{{end}}
-      <img src="/slides/{{.ID}}.png" alt="{{.Name}}" loading="lazy">
-      <div class="meta">
-        <span class="name" title="{{.Name}}">{{.Name}}</span>
-        <form class="location" action="/location/{{.ID}}" method="post">
-          <input type="text" name="location" value="{{.Location}}" maxlength="{{$.MaxLoc}}" placeholder="Add a location…" aria-label="Location of {{.Name}}">
-          <button class="outline sm" type="submit">Tag</button>
-        </form>
+      <div class="thumb">
+        <img src="/slides/{{.ID}}.png" alt="{{.Name}}" loading="lazy">
         <div class="actions">
           <form action="/show/{{.ID}}" method="post">
-            <button class="outline sm" type="submit">Show now</button>
+            <button class="icon" type="submit" title="Show now" aria-label="Show {{.Name}} now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </form>
           <form action="/delete/{{.ID}}" method="post" onsubmit="return confirm('Delete this Image?')">
-            <button class="danger sm" type="submit" aria-label="Delete {{.Name}}">Delete</button>
+            <button class="icon danger" type="submit" title="Delete" aria-label="Delete {{.Name}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/></svg></button>
           </form>
         </div>
+      </div>
+      <div class="meta">
+        <form class="location" action="/location/{{.ID}}" method="post">
+          <input type="text" name="location" value="{{.Location}}" maxlength="{{$.MaxLoc}}" placeholder="Add a location…" aria-label="Location of {{.Name}}">
+          <button class="icon save" type="submit" title="Save location" aria-label="Save location of {{.Name}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg></button>
+        </form>
+        <span class="name" title="{{.Name}}">{{.Name}}</span>
       </div>
     </li>
     {{end}}

@@ -68,17 +68,33 @@ button.sm { height: 32px; padding: 0 10px; }
 /* Gallery */
 .gallery-head { display: flex; align-items: baseline; justify-content: space-between; margin-top: 8px; }
 .count { color: var(--muted); font-size: .875rem; }
-.gallery { list-style: none; padding: 0; margin: 0; display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); }
-.gallery li { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); transition: box-shadow .2s, transform .2s; }
+.gallery { list-style: none; padding: 0; margin: 0; display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+.gallery li { position: relative; min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); transition: box-shadow .2s, transform .2s; }
 .gallery li:hover { box-shadow: 0 6px 20px rgb(0 0 0 / .08); transform: translateY(-1px); }
 .gallery li[aria-current] { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.thumb { position: relative; }
 .gallery img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--accent); }
-.badge { position: absolute; top: 10px; left: 10px; display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: var(--primary); color: var(--on-primary); font-size: .75rem; font-weight: 500; }
+.badge { position: absolute; z-index: 1; top: 10px; left: 10px; display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: var(--primary); color: var(--on-primary); font-size: .75rem; font-weight: 500; }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
-.meta { display: grid; gap: 8px; padding: 10px 12px 12px; }
-.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .875rem; }
-.actions { display: flex; gap: 4px; flex: none; }
+
+/* Show and delete sit on the photo, shown on hover, always on touch screens. */
+.actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; opacity: 0; transition: opacity .15s; }
+.gallery li:hover .actions, .actions:focus-within { opacity: 1; }
+@media (hover: none) { .actions { opacity: 1; } }
 .actions form { margin: 0; }
+button.icon { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 999px; }
+button.icon svg { width: 17px; height: 17px; }
+.actions button.icon { background: rgb(255 255 255 / .92); color: #18181b; box-shadow: 0 1px 4px rgb(0 0 0 / .25); }
+.actions button.icon.danger { color: #dc2626; }
+
+/* The location is the card's caption, typed in place. */
+.meta { display: grid; gap: 2px; padding: 10px 12px 12px; min-width: 0; }
+.location { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; margin: 0; }
+.location input { width: 100%; min-width: 0; font: italic 600 1.15rem/1.2 "Cormorant Garamond", Garamond, Georgia, serif; padding: 4px 0; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--fg); transition: border-color .15s; }
+.location input::placeholder { color: var(--muted); font-weight: 500; }
+.location input:hover { border-bottom-color: var(--line); }
+.location input:focus { outline: 0; border-bottom-color: var(--ring); }
+.location button.icon.save { width: 30px; height: 30px; background: transparent; color: var(--muted); border-color: var(--line); }
+.location button.icon.save:hover { background: var(--accent); color: var(--fg); }
+.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .75rem; color: var(--muted); }
 .empty { display: grid; place-items: center; padding: 48px 16px; text-align: center; color: var(--muted); border: 1.5px dashed var(--line); border-radius: var(--radius); }
-.location { display: flex; gap: 4px; margin: 0; }
-.location input { flex: 1; min-width: 0; font: italic 600 .95rem "Cormorant Garamond", Garamond, Georgia, serif; height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); }
