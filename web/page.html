@@ -4,61 +4,46 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>E-Ink Frame</title>
-<style>
-  :root { color-scheme: light dark; --fg: #1a1a1a; --bg: #f6f5f2; --card: #fff; --muted: #6b6b6b; --line: #ddd; --bad: #b3261e; }
-  @media (prefers-color-scheme: dark) { :root { --fg: #eee; --bg: #161616; --card: #222; --muted: #9a9a9a; --line: #333; --bad: #f2b8b5; } }
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: 16px; font: 16px/1.4 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
-  main { max-width: 960px; margin: 0 auto; }
-  h1 { font-size: 1.4rem; margin: 0 0 16px; }
-  form.upload { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
-  form.upload input[type=file] { flex: 1 1 200px; min-width: 0; }
-  button { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--fg); color: var(--bg); cursor: pointer; }
-  button.delete { background: none; color: var(--bad); border-color: currentColor; padding: 6px 12px; }
-  .problems { margin: 16px 0 0; padding: 12px 16px; border: 1px solid var(--bad); border-radius: 8px; color: var(--bad); }
-  .problems ul { margin: 0; padding-left: 20px; }
-  .gallery { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); }
-  .gallery li { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .gallery li[aria-current] { border-color: var(--fg); box-shadow: 0 0 0 2px var(--fg); }
-  .badge { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 999px; background: var(--fg); color: var(--bg); font-size: 0.8rem; }
-  .actions { display: flex; gap: 6px; flex: none; }
-  button.show { padding: 6px 12px; }
-  .gallery img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--line); }
-  .meta { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 10px; }
-  .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 0.9rem; }
-  .empty { color: var(--muted); margin-top: 24px; }
-  form.clock { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 12px; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
-  form.clock label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
-  form.clock input[type=number], form.clock select { font: inherit; padding: 4px 6px; width: 5.5em; }
-  form.clock select { width: auto; }
-  .status { margin: 16px 0 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
-  .status ul { margin: 0; padding-left: 20px; }
-  .status .bad { color: var(--bad); }
-  form.clock button { padding: 6px 12px; margin-left: auto; }
-</style>
+<link rel="stylesheet" href="/static/page.css">
 </head>
 <body>
 <main>
-  <h1>E-Ink Frame</h1>
-  <form class="upload" action="/upload" method="post" enctype="multipart/form-data">
-    <input type="file" name="images" accept="image/jpeg,image/png" multiple required>
-    <button type="submit">Upload</button>
-  </form>
-  <div class="status" id="upload-status" aria-live="polite" hidden><ul></ul></div>
-  <form class="clock" action="/clock" method="post">
-    <label><input type="checkbox" name="on" value="true"{{if .Clock.On}} checked{{end}}> Ghost clock</label>
-    <label>Step <input type="number" name="step" min="{{.MinStep}}" max="{{.MaxStep}}" value="{{.Clock.Step}}" required> px</label>
-    <label>Style
-      <select name="style">
-        <option value="ink"{{if eq .Clock.Style "ink"}} selected{{end}}>Ink on the photo</option>
-        <option value="chalk"{{if eq .Clock.Style "chalk"}} selected{{end}}>Chalk on a black band</option>
-      </select>
-    </label>
-    <button type="submit">Save</button>
-  </form>
+  <header>
+    <h1>E-Ink Frame</h1>
+    <p>Photos that change slowly, without a backlight.</p>
+  </header>
   {{with .Problems}}
   <div class="problems" role="alert"><ul>{{range .}}<li>{{.}}</li>{{end}}</ul></div>
   {{end}}
+  <div class="cards">
+    <form class="card upload" action="/upload" method="post" enctype="multipart/form-data">
+      <header><h2>Add Images</h2><p class="hint">JPEG or PNG. Each one becomes a Slide.</p></header>
+      <label class="drop">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <strong>Drop images here</strong>
+        <span>or click to choose</span>
+        <input type="file" name="images" accept="image/jpeg,image/png" multiple required>
+      </label>
+      <div class="row">
+        <span class="chosen">Nothing chosen</span>
+        <button type="submit">Upload</button>
+      </div>
+      <ul class="status" id="upload-status" aria-live="polite" hidden></ul>
+    </form>
+    <form class="card clock" action="/clock" method="post">
+      <header><h2>Ghost clock</h2><p class="hint">Writes the time onto the photo by hand.</p></header>
+      <label class="field"><span>Show the clock</span><input class="switch" type="checkbox" role="switch" name="on" value="true"{{if .Clock.On}} checked{{end}}></label>
+      <label class="field"><span>Pen step</span><span class="unit"><input type="number" name="step" min="{{.MinStep}}" max="{{.MaxStep}}" value="{{.Clock.Step}}" required> px</span></label>
+      <label class="field"><span>Style</span>
+        <select name="style">
+          <option value="ink"{{if eq .Clock.Style "ink"}} selected{{end}}>Ink on the photo</option>
+          <option value="chalk"{{if eq .Clock.Style "chalk"}} selected{{end}}>Chalk on a black band</option>
+        </select>
+      </label>
+      <footer><button type="submit">Save</button></footer>
+    </form>
+  </div>
+  <div class="gallery-head"><h2>Slideshow</h2>{{with .Entries}}<span class="count">{{len .}} total</span>{{end}}</div>
   {{if .Entries}}
   <ul class="gallery">
     {{range .Entries}}
@@ -69,10 +54,10 @@
         <span class="name" title="{{.Name}}">{{.Name}}</span>
         <div class="actions">
           <form action="/show/{{.ID}}" method="post">
-            <button class="show" type="submit">Show now</button>
+            <button class="outline sm" type="submit">Show now</button>
           </form>
           <form action="/delete/{{.ID}}" method="post" onsubmit="return confirm('Delete this Image?')">
-            <button class="delete" type="submit">Delete</button>
+            <button class="danger sm" type="submit" aria-label="Delete {{.Name}}">Delete</button>
           </form>
         </div>
       </div>
@@ -114,11 +99,10 @@ document.querySelector("form.upload").addEventListener("submit", async (ev) => {
   const form = ev.target;
   const input = form.elements.images;
   const button = form.querySelector("button");
-  const status = document.getElementById("upload-status");
-  const list = status.querySelector("ul");
+  const list = document.getElementById("upload-status");
   const files = [...input.files];
   list.replaceChildren();
-  status.hidden = false;
+  list.hidden = false;
   button.disabled = input.disabled = true;
 
   let added = 0;
@@ -144,6 +128,7 @@ document.querySelector("form.upload").addEventListener("submit", async (ev) => {
       const res = await fetch(form.action, { method: "POST", body, headers: { Accept: "application/json" } });
       if (res.ok) {
         li.textContent = `${file.name}: added`;
+        li.className = "ok";
         added++;
         continue;
       }
@@ -167,6 +152,25 @@ document.querySelector("form.upload").addEventListener("submit", async (ev) => {
     list.append(li);
   }
   form.reset();
+  showChosen();
+});
+
+// Name what is chosen, and let Images be dropped anywhere on the drop zone.
+const upload = document.querySelector("form.upload");
+const drop = upload.querySelector(".drop");
+function showChosen() {
+  const files = upload.elements.images.files;
+  upload.querySelector(".chosen").textContent =
+    files.length === 0 ? "Nothing chosen" : files.length === 1 ? files[0].name : `${files.length} Images chosen`;
+}
+upload.elements.images.addEventListener("change", showChosen);
+drop.addEventListener("dragover", (ev) => { ev.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (ev) => {
+  ev.preventDefault();
+  drop.classList.remove("over");
+  upload.elements.images.files = ev.dataTransfer.files;
+  showChosen();
 });
 </script>
 </body>
