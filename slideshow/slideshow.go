@@ -77,7 +77,11 @@ type Slideshow struct {
 	// partial Refreshes, and rewrites it every five minutes. Set it before
 	// Run; afterwards use SetClock.
 	Clock ClockSettings
-	// ConfigPath is the config file SetClock saves to; "" saves nothing.
+	// Tag is how locations are written on Slides. Set it before Run;
+	// afterwards use SetTag.
+	Tag tag.Settings
+	// ConfigPath is the config file SetClock and SetTag save to; "" saves
+	// nothing.
 	ConfigPath string
 
 	// Now is the time the Clock shows. Nil means time.Now.
@@ -190,6 +194,28 @@ func (s *Slideshow) SetClock(c ClockSettings) error {
 		return nil
 	}
 	return SaveClock(s.ConfigPath, c)
+}
+
+// TagSettings returns how locations are written. It never waits for a Refresh.
+func (s *Slideshow) TagSettings() tag.Settings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Tag
+}
+
+// SetTag changes how locations are written and saves that to ConfigPath. The
+// panel follows with the next Slide, or with a Retag of the current one.
+func (s *Slideshow) SetTag(t tag.Settings) error {
+	if err := t.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Tag = t
+	if s.ConfigPath == "" {
+		return nil
+	}
+	return SaveTag(s.ConfigPath, t)
 }
 
 // Tick brings the Clock on the panel up to date: it rubs out the old time
@@ -396,7 +422,7 @@ func (s *Slideshow) ids() ([]string, error) {
 }
 
 // Retag shows the Slide with this ID again if it is on the panel, so a
-// changed location appears.
+// changed location or tag setting appears.
 func (s *Slideshow) Retag(id string) error {
 	s.refresh.Lock()
 	defer s.refresh.Unlock()
@@ -429,7 +455,11 @@ func (s *Slideshow) show(id string) error {
 	if err != nil {
 		return fmt.Errorf("Slide %s: %w", id, err)
 	}
-	tag.Draw(sl, s.location(id))
+	bottom := sl.Bounds().Max.Y
+	if s.ClockOn() {
+		bottom = clock.Band(sl.Bounds()).Min.Y
+	}
+	tag.Draw(sl, s.location(id), s.TagSettings(), bottom)
 	if err := s.Panel.Show(sl); err != nil {
 		s.clean = nil
 		return fmt.Errorf("showing Slide %s: %w", id, err)

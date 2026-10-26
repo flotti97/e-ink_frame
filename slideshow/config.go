@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/flotti97/e-ink_frame/internal/atomicfile"
+	"github.com/flotti97/e-ink_frame/tag"
 )
 
 // Config holds the Frame's settings, read from a JSON file such as
 //
 //	{"interval": "45m", "library": "data", "state": "data/shuffle.json", "listen": ":8080", "vcom": -1.58,
-//	 "clock": true, "clock_step": 20, "clock_style": "ink"}
+//	 "clock": true, "clock_step": 20, "clock_style": "ink",
+//	 "tag": true, "tag_auto": true, "tag_position": "top-left", "tag_font": "caveat", "tag_size": 64}
 type Config struct {
 	Interval time.Duration // time between Slides
 	Library  string        // Image library directory
@@ -22,6 +24,7 @@ type Config struct {
 	Listen   string        // address of the upload page
 	VCOM     float64       // panel VCOM in volts, from its flex cable; 0 means unset
 	Clock    ClockSettings // how the time is written on every Slide
+	Tag      tag.Settings  // how locations are written on Slides
 }
 
 // Clock styles.
@@ -61,6 +64,7 @@ var DefaultConfig = Config{
 	State:    "data/shuffle.json",
 	Listen:   ":8080",
 	Clock:    ClockSettings{On: true, Step: 20, Style: StyleInk},
+	Tag:      tag.Default,
 }
 
 // LoadConfig reads the config file at path. A missing file gives DefaultConfig.
@@ -83,6 +87,11 @@ func LoadConfig(path string) (Config, error) {
 		Clock    *bool    `json:"clock"`
 		Step     *int     `json:"clock_step"`
 		Style    *string  `json:"clock_style"`
+		Tag      *bool    `json:"tag"`
+		TagAuto  *bool    `json:"tag_auto"`
+		TagPos   *string  `json:"tag_position"`
+		TagFont  *string  `json:"tag_font"`
+		TagSize  *int     `json:"tag_size"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -120,7 +129,25 @@ func LoadConfig(path string) (Config, error) {
 	if raw.Style != nil {
 		c.Clock.Style = *raw.Style
 	}
+	if raw.Tag != nil {
+		c.Tag.On = *raw.Tag
+	}
+	if raw.TagAuto != nil {
+		c.Tag.Auto = *raw.TagAuto
+	}
+	if raw.TagPos != nil {
+		c.Tag.Position = *raw.TagPos
+	}
+	if raw.TagFont != nil {
+		c.Tag.Font = *raw.TagFont
+	}
+	if raw.TagSize != nil {
+		c.Tag.Size = *raw.TagSize
+	}
 	if err := c.Clock.Validate(); err != nil {
+		return c, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := c.Tag.Validate(); err != nil {
 		return c, fmt.Errorf("%s: %w", path, err)
 	}
 	return c, nil
@@ -129,6 +156,17 @@ func LoadConfig(path string) (Config, error) {
 // SaveClock sets the clock settings in the config file at path, keeping its
 // other settings. A missing file is created.
 func SaveClock(path string, c ClockSettings) error {
+	return save(path, map[string]any{"clock": c.On, "clock_step": c.Step, "clock_style": c.Style})
+}
+
+// SaveTag sets the tag settings in the config file at path, keeping its
+// other settings. A missing file is created.
+func SaveTag(path string, t tag.Settings) error {
+	return save(path, map[string]any{"tag": t.On, "tag_auto": t.Auto, "tag_position": t.Position, "tag_font": t.Font, "tag_size": t.Size})
+}
+
+// save sets these keys in the config file at path, keeping the others.
+func save(path string, set map[string]any) error {
 	raw := map[string]json.RawMessage{}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -139,9 +177,9 @@ func SaveClock(path string, c ClockSettings) error {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 	}
-	raw["clock"], _ = json.Marshal(c.On)
-	raw["clock_step"], _ = json.Marshal(c.Step)
-	raw["clock_style"], _ = json.Marshal(c.Style)
+	for k, v := range set {
+		raw[k], _ = json.Marshal(v)
+	}
 	out, err := json.MarshalIndent(raw, "", "\t")
 	if err != nil {
 		return err

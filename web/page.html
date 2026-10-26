@@ -6,7 +6,7 @@
 <title>E-Ink Frame</title>
 <link rel="stylesheet" href="/static/page.css">
 </head>
-<body>
+<body style="--tag-font: tag-{{.Tag.Font}}">
 <main>
   <header>
     <h1>E-Ink Frame</h1>
@@ -41,6 +41,27 @@
         </select>
       </label>
       <footer><button type="submit">Save</button></footer>
+    </form>
+    <form class="card tags" action="/tags" method="post">
+      <header><h2>Location tags</h2><p class="hint">Writes where a photo was taken onto its Slide.</p></header>
+      <label class="field"><span>Show tags</span><input class="switch" type="checkbox" role="switch" name="on" value="true"{{if .Tag.On}} checked{{end}}></label>
+      <label class="field"><span>Tag new photos from GPS</span><input class="switch" type="checkbox" role="switch" name="auto" value="true"{{if .Tag.Auto}} checked{{end}}></label>
+      <label class="field"><span>Position</span>
+        <select name="position">
+          {{range .Pos}}<option value="{{.}}"{{if eq . $.Tag.Position}} selected{{end}}>{{label .}}</option>{{end}}
+        </select>
+      </label>
+      <label class="field"><span>Font</span>
+        <select name="font">
+          {{range .Fonts}}<option value="{{.Key}}"{{if eq .Key $.Tag.Font}} selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </label>
+      <label class="field"><span>Size</span><span class="unit"><input type="number" name="size" min="{{.MinSize}}" max="{{.MaxSize}}" value="{{.Tag.Size}}" required> px</span></label>
+      <p class="tag-preview" aria-hidden="true">Hallstatt, Austria</p>
+      <footer>
+        <button class="outline" type="submit" formaction="/tags/auto"{{if .Tagging}} disabled{{end}} title="Looks up the place for every untagged photo with a GPS position">{{if .Tagging}}Tagging…{{else}}Tag photos from GPS{{end}}</button>
+        <button type="submit">Save</button>
+      </footer>
     </form>
   </div>
   <div class="gallery-head"><h2>Slideshow</h2>{{with .Entries}}<span class="count">{{len .}} total</span>{{end}}</div>
@@ -160,6 +181,16 @@ document.querySelector("form.upload").addEventListener("submit", async (ev) => {
   form.reset();
   showChosen();
 });
+
+// Preview the chosen tag font and size.
+const tags = document.querySelector("form.tags");
+const preview = tags.querySelector(".tag-preview");
+function showTagFont() {
+  preview.style.fontFamily = `tag-${tags.elements.font.value}`;
+  preview.style.fontSize = `${Math.min(tags.elements.size.value, 120) / 2}px`;
+}
+tags.addEventListener("input", showTagFont);
+showTagFont();
 
 // Name what is chosen, and let Images be dropped anywhere on the drop zone.
 const upload = document.querySelector("form.upload");

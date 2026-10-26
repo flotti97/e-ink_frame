@@ -27,3 +27,7 @@ _Avoid_: Playlist, carousel, gallery
 **Refresh**:
 One physical update of the panel. A _full_ Refresh redraws and clears the whole panel; a _partial_ Refresh updates only part of it.
 _Avoid_: Redraw, update, flip
+
+**Tag**:
+An Image's location written onto its Slide when it is shown. Typed on the upload page or looked up from the Image's GPS position.
+_Avoid_: Caption, label

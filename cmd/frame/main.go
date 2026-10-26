@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flotti97/e-ink_frame/geotag"
 	"github.com/flotti97/e-ink_frame/it8951"
 	"github.com/flotti97/e-ink_frame/library"
 	"github.com/flotti97/e-ink_frame/slideshow"
@@ -81,11 +82,12 @@ func run(configPath, fakePanel string, logger *log.Logger) error {
 		Rand:       rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
 		Log:        logger,
 		Clock:      cfg.Clock,
+		Tag:        cfg.Tag,
 		ConfigPath: configPath,
 	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           web.New(lib, show),
+		Handler:           web.New(lib, show, (&geotag.Nominatim{}).Locate),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       10 * time.Minute, // big uploads over slow Wi-Fi
 	}

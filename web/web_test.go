@@ -2,6 +2,9 @@ package web
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
+	"image/jpeg"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +21,7 @@ import (
 	"github.com/flotti97/e-ink_frame/library"
 	"github.com/flotti97/e-ink_frame/slide"
 	"github.com/flotti97/e-ink_frame/slideshow"
+	"github.com/flotti97/e-ink_frame/tag"
 )
 
 // fakeSlideshow records "show now" presses and the Clock settings.
@@ -27,9 +31,23 @@ type fakeSlideshow struct {
 	shown    []string
 	clock    slideshow.ClockSettings
 	clockErr error
+	tag      tag.Settings
+	retagged chan string
 }
 
-func (f *fakeSlideshow) Retag(string) error { return nil }
+func (f *fakeSlideshow) Retag(id string) error {
+	if f.retagged != nil {
+		f.retagged <- id
+	}
+	return nil
+}
+
+func (f *fakeSlideshow) TagSettings() tag.Settings { return f.tag }
+
+func (f *fakeSlideshow) SetTag(t tag.Settings) error {
+	f.tag = t
+	return nil
+}
 
 func (f *fakeSlideshow) ClockSettings() slideshow.ClockSettings { return f.clock }
 
@@ -63,8 +81,8 @@ func newServerWithSlideshow(t *testing.T) (*library.Library, *fakeSlideshow, htt
 	if err != nil {
 		t.Fatal(err)
 	}
-	show := &fakeSlideshow{}
-	return lib, show, New(lib, show)
+	show := &fakeSlideshow{tag: tag.Default}
+	return lib, show, New(lib, show, func(context.Context, float64, float64) (string, error) { return "Nowhere", nil })
 }
 
 func pngBytes(t *testing.T, shade uint8) []byte {
@@ -305,6 +323,7 @@ func TestClockSettingsAreShownAndSaved(t *testing.T) {
 		}
 	}
 	// An unchecked box sends nothing.
+	show.tag.On = false // its switch is on the page too
 	if rec := postForm(h, "/clock", "step=40&style=chalk"); rec.Code != http.StatusSeeOther {
 		t.Fatalf("saving answered %d", rec.Code)
 	}
@@ -411,5 +430,79 @@ func TestUploadUsesTheBrowsersSlideOrRendersItsOwn(t *testing.T) {
 		if e.Name == "browser.png" && !bytes.Equal(got, good.Bytes()) {
 			t.Errorf("browser.png: the browser's Slide was not kept")
 		}
+	}
+}
+
+func TestTagSettingsAreShownAndSaved(t *testing.T) {
+	_, show, h := newServerWithSlideshow(t)
+	body := get(h, "/").Body.String()
+	for _, want := range []string{`action="/tags"`, `value="cormorant" selected`, `value="top-left" selected`, `name="size"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page is missing %s", want)
+		}
+	}
+	if rec := postForm(h, "/tags", "on=true&auto=true&position=bottom-right&font=caveat&size=90"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving answered %d", rec.Code)
+	}
+	if want := (tag.Settings{On: true, Auto: true, Position: "bottom-right", Font: "caveat", Size: 90}); show.tag != want {
+		t.Fatalf("saved %+v, want %+v", show.tag, want)
+	}
+	if rec := postForm(h, "/tags", "position=middle&font=caveat&size=90"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad position answered %d", rec.Code)
+	}
+}
+
+func TestTagFontsAreServed(t *testing.T) {
+	_, h := newServer(t)
+	if rec := get(h, "/fonts/marker.ttf"); rec.Code != http.StatusOK || rec.Body.Len() < 1000 {
+		t.Fatalf("font answered %d, %d bytes", rec.Code, rec.Body.Len())
+	}
+	if rec := get(h, "/fonts/nope.ttf"); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown font answered %d", rec.Code)
+	}
+}
+
+// withGPS puts an EXIF segment with a GPS position into a JPEG.
+func withGPS(t *testing.T, img []byte) []byte {
+	t.Helper()
+	o := binary.LittleEndian
+	x := o.AppendUint32([]byte("II*\x00"), 8)
+	x = o.AppendUint16(x, 1)
+	x = o.AppendUint16(x, 0x8825)
+	x = o.AppendUint16(x, 4)
+	x = o.AppendUint32(x, 1)
+	x = o.AppendUint32(x, 26)
+	x = o.AppendUint32(x, 0)
+	x = o.AppendUint16(x, 4)
+	for _, e := range [][3]uint32{{1, 2, 'N'}, {2, 5, 80}, {3, 2, 'E'}, {4, 5, 104}} {
+		x = o.AppendUint16(x, uint16(e[0]))
+		x = o.AppendUint16(x, uint16(e[1]))
+		x = o.AppendUint32(x, map[uint32]uint32{2: 2, 5: 3}[e[1]])
+		x = o.AppendUint32(x, e[2])
+	}
+	x = o.AppendUint32(x, 0)
+	for _, v := range []uint32{47, 1, 33, 1, 45, 1, 13, 1, 38, 1, 51, 1} {
+		x = o.AppendUint32(x, v)
+	}
+	seg := append([]byte("Exif\x00\x00"), x...)
+	out := binary.BigEndian.AppendUint16([]byte{0xFF, 0xD8, 0xFF, 0xE1}, uint16(len(seg)+2))
+	return append(append(out, seg...), img[2:]...)
+}
+
+func TestUploadsAreTaggedFromTheirGPSPosition(t *testing.T) {
+	lib, show, h := newServerWithSlideshow(t)
+	show.tag.Auto = true
+	show.retagged = make(chan string, 1)
+	var b bytes.Buffer
+	if err := jpeg.Encode(&b, image.NewGray(image.Rect(0, 0, 40, 30)), nil); err != nil {
+		t.Fatal(err)
+	}
+	if rec := upload(t, h, map[string][]byte{"hallstatt.jpg": withGPS(t, b.Bytes())}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload answered %d: %s", rec.Code, rec.Body)
+	}
+	id := <-show.retagged
+	entries, _ := lib.List()
+	if len(entries) != 1 || entries[0].ID != id || entries[0].Location != "Nowhere" {
+		t.Fatalf("entries %+v", entries)
 	}
 }

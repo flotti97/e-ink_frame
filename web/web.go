@@ -4,6 +4,8 @@
 package web
 
 import (
+	"bytes"
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -13,12 +15,17 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
+	"github.com/flotti97/e-ink_frame/geotag"
 	"github.com/flotti97/e-ink_frame/library"
 	"github.com/flotti97/e-ink_frame/slideshow"
+	"github.com/flotti97/e-ink_frame/tag"
 )
 
 // maxUpload caps one upload request. Phone photos are a few MB each.
@@ -35,7 +42,13 @@ var pageHTML string
 //go:embed static
 var static embed.FS
 
-var page = template.Must(template.New("page").Parse(pageHTML))
+var page = template.Must(template.New("page").Funcs(template.FuncMap{
+	// label turns a tag position like "top-left" into "Top left".
+	"label": func(pos string) string {
+		pos = strings.ReplaceAll(pos, "-", " ")
+		return strings.ToUpper(pos[:1]) + pos[1:]
+	},
+}).Parse(pageHTML))
 
 // Slideshow is the running Slideshow the page controls.
 type Slideshow interface {
@@ -44,16 +57,24 @@ type Slideshow interface {
 	ClockSettings() slideshow.ClockSettings
 	SetClock(c slideshow.ClockSettings) error
 	Retag(id string) error
+	TagSettings() tag.Settings
+	SetTag(t tag.Settings) error
 }
+
+// Locate names the place at a GPS position, such as geotag.Nominatim.Locate.
+type Locate func(ctx context.Context, lat, lon float64) (string, error)
 
 type server struct {
-	lib  *library.Library
-	show Slideshow
+	lib     *library.Library
+	show    Slideshow
+	locate  Locate
+	tagging atomic.Bool // a run of tagAll is going
 }
 
-// New returns the handler for the upload page.
-func New(lib *library.Library, show Slideshow) http.Handler {
-	s := &server{lib: lib, show: show}
+// New returns the handler for the upload page. Images are tagged with the
+// place locate names for their GPS position.
+func New(lib *library.Library, show Slideshow, locate Locate) http.Handler {
+	s := &server{lib: lib, show: show, locate: locate}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.gallery)
 	mux.HandleFunc("POST /upload", s.upload)
@@ -61,6 +82,9 @@ func New(lib *library.Library, show Slideshow) http.Handler {
 	mux.HandleFunc("POST /show/{id}", s.showNow)
 	mux.HandleFunc("POST /clock", s.setClock)
 	mux.HandleFunc("POST /location/{id}", s.setLocation)
+	mux.HandleFunc("POST /tags", s.setTags)
+	mux.HandleFunc("POST /tags/auto", s.autoTagAll)
+	mux.HandleFunc("GET /fonts/{file}", s.font)
 	mux.HandleFunc("GET /slides/{file}", s.slide)
 	mux.Handle("GET /static/", http.FileServerFS(static))
 	// There is no login, so refuse form posts that other websites make the
@@ -110,10 +134,14 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 			problems = append(problems, fmt.Sprintf("%s: %v", fh.Filename, err))
 			continue
 		}
-		_, err = s.add(fh.Filename, f, r.MultipartForm.File["slide"], len(files))
+		e, err := s.add(fh.Filename, f, r.MultipartForm.File["slide"], len(files))
 		f.Close()
 		if err != nil {
 			problems = append(problems, err.Error())
+			continue
+		}
+		if s.show.TagSettings().Auto && e.Location == "" {
+			go s.autoTag(e)
 		}
 	}
 	switch {
@@ -216,10 +244,105 @@ func (s *server) setLocation(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusInternalServerError, []string{"Saving the location failed: " + err.Error()})
 		return
 	}
+	go s.retag(id)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// retag shows the Slide with this ID again if it is on the panel. It waits
+// for a Refresh, so it runs in the background.
+func (s *server) retag(id string) {
 	if err := s.show.Retag(id); err != nil {
 		log.Printf("web: retagging %s: %v", id, err)
 	}
+}
+
+func (s *server) setTags(w http.ResponseWriter, r *http.Request) {
+	size, err := strconv.Atoi(r.FormValue("size"))
+	if err != nil {
+		s.render(w, http.StatusBadRequest, []string{"Tag size must be a whole number of pixels."})
+		return
+	}
+	t := tag.Settings{
+		On: r.FormValue("on") == "true", Auto: r.FormValue("auto") == "true",
+		Position: r.FormValue("position"), Font: r.FormValue("font"), Size: size,
+	}
+	if err := t.Validate(); err != nil {
+		s.render(w, http.StatusBadRequest, []string{"Tag settings not saved: " + err.Error()})
+		return
+	}
+	if err := s.show.SetTag(t); err != nil {
+		s.render(w, http.StatusInternalServerError, []string{"Saving the tag settings failed: " + err.Error()})
+		return
+	}
+	if cur := s.show.Current(); cur != "" {
+		go s.retag(cur)
+	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// autoTagAll tags every untagged Image that has a GPS position, in the
+// background, one at a time.
+func (s *server) autoTagAll(w http.ResponseWriter, r *http.Request) {
+	entries, err := s.lib.List()
+	if err != nil {
+		s.render(w, http.StatusInternalServerError, []string{"Could not list Images: " + err.Error()})
+		return
+	}
+	if s.tagging.CompareAndSwap(false, true) {
+		go func() {
+			defer s.tagging.Store(false)
+			for _, e := range entries {
+				if e.Location == "" {
+					s.autoTag(e)
+				}
+			}
+		}()
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// autoTag sets the location of e to the place its GPS position names, if it
+// has one.
+func (s *server) autoTag(e library.Entry) {
+	data, err := os.ReadFile(s.lib.ImagePath(e))
+	if err != nil {
+		log.Printf("web: auto tag %s: %v", e.Name, err)
+		return
+	}
+	lat, lon, ok := geotag.GPS(data)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	place, err := s.locate(ctx, lat, lon)
+	if err != nil {
+		log.Printf("web: auto tag %s at %.4f,%.4f: %v", e.Name, lat, lon, err)
+		return
+	}
+	if len([]rune(place)) > maxLocation {
+		place = string([]rune(place)[:maxLocation])
+	}
+	if err := s.lib.SetLocation(e.ID, place); err != nil {
+		log.Printf("web: auto tag %s: %v", e.Name, err)
+		return
+	}
+	log.Printf("web: tagged %s %q", e.Name, place)
+	s.retag(e.ID)
+}
+
+// font serves a tag Font, so the page can show what it looks like.
+func (s *server) font(w http.ResponseWriter, r *http.Request) {
+	key, _ := strings.CutSuffix(r.PathValue("file"), ".ttf")
+	for _, f := range tag.Fonts {
+		if f.Key == key {
+			w.Header().Set("Content-Type", "font/ttf")
+			w.Header().Set("Cache-Control", "max-age=86400")
+			http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(f.TTF()))
+			return
+		}
+	}
+	http.NotFound(w, r)
 }
 
 func (s *server) slide(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +375,14 @@ func (s *server) render(w http.ResponseWriter, status int, problems []string) {
 		MinStep  int
 		MaxStep  int
 		MaxLoc   int
-	}{problems, entries, s.show.Current(), s.show.ClockSettings(), slideshow.MinClockStep, slideshow.MaxClockStep, maxLocation}); err != nil {
+		Tag      tag.Settings
+		Fonts    []tag.Font
+		Pos      []string
+		MinSize  int
+		MaxSize  int
+		Tagging  bool
+	}{problems, entries, s.show.Current(), s.show.ClockSettings(), slideshow.MinClockStep, slideshow.MaxClockStep, maxLocation,
+		s.show.TagSettings(), tag.Fonts, tag.Positions, tag.MinSize, tag.MaxSize, s.tagging.Load()}); err != nil {
 		log.Printf("web: rendering page: %v", err)
 	}
 }
