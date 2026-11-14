@@ -83,6 +83,7 @@ func run(configPath, fakePanel string, logger *log.Logger) error {
 		Log:        logger,
 		Clock:      cfg.Clock,
 		Tag:        cfg.Tag,
+		Dashboard:  cfg.Dashboard,
 		ConfigPath: configPath,
 	}
 	srv := &http.Server{

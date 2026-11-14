@@ -12,12 +12,14 @@ import (
 	"image/png"
 	"log"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/flotti97/e-ink_frame/clock"
+	"github.com/flotti97/e-ink_frame/dashboard"
 	"github.com/flotti97/e-ink_frame/internal/atomicfile"
 	"github.com/flotti97/e-ink_frame/it8951"
 	"github.com/flotti97/e-ink_frame/library"
@@ -80,8 +82,15 @@ type Slideshow struct {
 	// Tag is how locations are written on Slides. Set it before Run;
 	// afterwards use SetTag.
 	Tag tag.Settings
-	// ConfigPath is the config file SetClock and SetTag save to; "" saves
-	// nothing.
+	// Dashboard, while on, is shown instead of Slides and fetched again
+	// every Dashboard.Interval. Set it before Run; afterwards use
+	// SetDashboard.
+	Dashboard dashboard.Settings
+	// Fetch gets the dashboard at url, fitted to the panel. Nil means
+	// dashboard.Fetch.
+	Fetch func(ctx context.Context, url string) (*image.Gray, error)
+	// ConfigPath is the config file SetClock, SetTag and SetDashboard save
+	// to; "" saves nothing.
 	ConfigPath string
 
 	// Now is the time the Clock shows. Nil means time.Now.
@@ -93,12 +102,14 @@ type Slideshow struct {
 	refresh sync.Mutex  // one Refresh at a time; guards the fields below
 	clean   *image.Gray // the Slide on the panel, without the Clock
 	inked   bool        // the Clock is written on the panel
+	dashes  int         // dashboards shown in a row
 
 	mu          sync.Mutex    // guards the fields below; never held during a Refresh
 	onPanel     string        // ID of the Slide the panel shows
 	manual      uint64        // counts ShowNow Refreshes
 	restartWait func()        // cuts the running wait short
 	clockSet    chan struct{} // tells runClock that SetClock was called
+	switched    bool          // SetDashboard cut the running wait short
 }
 
 // Run shows the next Slide every Interval until ctx is done. Problems with a
@@ -111,12 +122,16 @@ type Slideshow struct {
 // it has been deleted, is a Slide shown straight away.
 func (s *Slideshow) Run(ctx context.Context) error {
 	s.refresh.Lock()
-	if s.currentStillExists() {
+	if s.DashboardSettings().On {
+		if err := s.showDashboard(); err != nil {
+			s.Log.Print(err)
+		}
+	} else if s.currentStillExists() {
 		s.setOnPanel(s.Shuffle.Current)
 		// The panel's clock went stale while the Frame was down. Partial
 		// Refreshes can't fix it yet: the controller was reset and takes the
 		// panel to be white, so the Slide goes up again with a full one.
-		if s.ClockOn() {
+		if s.clockActive() {
 			if err := s.show(s.Shuffle.Current); err != nil {
 				s.Log.Print(err)
 			}
@@ -124,7 +139,7 @@ func (s *Slideshow) Run(ctx context.Context) error {
 	}
 	s.refresh.Unlock()
 
-	if s.Current() == "" {
+	if s.Current() == "" && !s.DashboardSettings().On {
 		if err := s.Step(); err != nil {
 			s.Log.Print(err)
 		}
@@ -173,6 +188,41 @@ func (s *Slideshow) ClockSettings() ClockSettings {
 // ClockOn reports whether the Clock is on. It never waits for a Refresh.
 func (s *Slideshow) ClockOn() bool {
 	return s.ClockSettings().On
+}
+
+// clockActive reports whether the Clock is written: it is on and the
+// Dashboard isn't, which shows its own time.
+func (s *Slideshow) clockActive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Clock.On && !s.Dashboard.On
+}
+
+// DashboardSettings returns whether and how the Dashboard is shown. It never
+// waits for a Refresh.
+func (s *Slideshow) DashboardSettings() dashboard.Settings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Dashboard
+}
+
+// SetDashboard switches between the Dashboard and the Slideshow and saves
+// that to ConfigPath. The panel follows straight away, in the background.
+func (s *Slideshow) SetDashboard(d dashboard.Settings) error {
+	if err := d.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Dashboard = d
+	s.switched = true
+	if s.restartWait != nil {
+		s.restartWait()
+	}
+	if s.ConfigPath == "" {
+		return nil
+	}
+	return SaveDashboard(s.ConfigPath, d)
 }
 
 // SetClock changes how the Clock writes and saves that to ConfigPath. The
@@ -224,13 +274,13 @@ func (s *Slideshow) Tick() error {
 	s.refresh.Lock()
 	defer s.refresh.Unlock()
 	switch {
-	case s.ClockOn() && s.clean != nil:
+	case s.clockActive() && s.clean != nil:
 		return s.write(s.inked)
-	case s.ClockOn() && s.Current() != "":
+	case s.clockActive() && s.Current() != "":
 		// Turned on after a restart: the Slide must go up again first, as
 		// the controller doesn't know what the panel shows.
 		return s.show(s.Current())
-	case !s.ClockOn() && s.inked:
+	case !s.clockActive() && s.inked && s.clean != nil:
 		return s.erase()
 	}
 	return nil
@@ -309,16 +359,29 @@ func (s *Slideshow) wait(ctx context.Context) (uint64, error) {
 		gen := s.manual
 		s.mu.Unlock()
 
-		err := wait(wctx, s.Interval)
+		err := wait(wctx, s.interval())
 		cancel()
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
 		}
-		if err == nil {
+		s.mu.Lock()
+		switched := s.switched
+		s.switched = false
+		s.mu.Unlock()
+		if err == nil || switched {
 			return gen, nil
 		}
 		// Cut short by ShowNow: wait a full Interval from now.
 	}
+}
+
+// interval is the time until the next Slide, or the next fetch of the
+// Dashboard while it is on.
+func (s *Slideshow) interval() time.Duration {
+	if d := s.DashboardSettings(); d.On {
+		return d.Interval
+	}
+	return s.Interval
 }
 
 func (s *Slideshow) generation() uint64 {
@@ -336,6 +399,10 @@ func (s *Slideshow) timedStep(gen uint64) error {
 	if s.generation() != gen {
 		return nil
 	}
+	if s.DashboardSettings().On {
+		return s.showDashboard()
+	}
+	s.dashes = 0
 	return s.step()
 }
 
@@ -456,7 +523,7 @@ func (s *Slideshow) show(id string) error {
 		return fmt.Errorf("Slide %s: %w", id, err)
 	}
 	bottom := sl.Bounds().Max.Y
-	if s.ClockOn() {
+	if s.clockActive() {
 		bottom = clock.Band(sl.Bounds()).Min.Y
 	}
 	tag.Draw(sl, s.location(id), s.TagSettings(), bottom)
@@ -466,12 +533,50 @@ func (s *Slideshow) show(id string) error {
 	}
 	s.clean = sl
 	s.inked = false
+	s.dashes = 0
 	s.setOnPanel(id)
-	if s.ClockOn() {
+	if s.clockActive() {
 		if err := s.write(false); err != nil {
 			s.Log.Printf("writing clock: %v", err)
 		}
 	}
+	return nil
+}
+
+// fullDashEvery is how often a fetched Dashboard goes up with a full,
+// flashing Refresh to clear ghosting; the others change only what changed.
+const fullDashEvery = 12
+
+// showDashboard fetches the Dashboard and puts it up. When the fetch fails
+// the panel keeps what it shows.
+func (s *Slideshow) showDashboard() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	fetch := s.Fetch
+	if fetch == nil {
+		fetch = func(ctx context.Context, url string) (*image.Gray, error) {
+			return dashboard.Fetch(ctx, http.DefaultClient, url)
+		}
+	}
+	g, err := fetch(ctx, s.DashboardSettings().URL)
+	if err != nil {
+		return fmt.Errorf("fetching dashboard: %w", err)
+	}
+	if s.dashes%fullDashEvery == 0 {
+		err = s.Panel.Show(g)
+	} else {
+		err = s.Panel.Update(g, g.Bounds(), it8951.ModeGL16)
+		if serr := s.Panel.Sleep(); err == nil {
+			err = serr
+		}
+	}
+	s.clean, s.inked = nil, false
+	s.setOnPanel("")
+	if err != nil {
+		s.dashes = 0
+		return fmt.Errorf("showing dashboard: %w", err)
+	}
+	s.dashes++
 	return nil
 }
 

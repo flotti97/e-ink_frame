@@ -31,3 +31,7 @@ _Avoid_: Redraw, update, flip
 **Tag**:
 An Image's location written onto its Slide when it is shown. Typed on the upload page or looked up from the Image's GPS position.
 _Avoid_: Caption, label
+
+**Dashboard**:
+A Home Assistant dashboard, fetched as a picture from a screenshot add-on and shown instead of the Slideshow while switched on.
+_Avoid_: Home screen, status page

@@ -21,6 +21,26 @@ The upload page is a gallery of Images with delete buttons, a "show now" button 
 
 The terms **Frame**, **Image**, **Slide**, **Slideshow** and **Refresh** are defined in [CONTEXT.md](CONTEXT.md).
 
+## Home Assistant dashboard
+
+The Frame can show a Home Assistant **Dashboard** instead of the Slideshow. It doesn't render the dashboard itself; a screenshot add-on on Home Assistant does that, and the Frame downloads the picture.
+
+1. Install the [Puppet](https://github.com/balloob/home-assistant-addons/tree/main/puppet) add-on (or lovelace-kindle-screensaver) and give it a long-lived access token.
+2. A high-contrast dashboard looks best on e-paper. Its picture URL is then something like `http://homeassistant.local:10000/lovelace/0?viewport=1872x1404`.
+3. On the upload page, enter that URL under **Home Assistant** and switch it on. The Frame fetches it every few minutes (5 by default) and changes only what changed; every 12th fetch is a full, flashing Refresh to clear ghosting. The Clock is off while the Dashboard is shown.
+
+Automations can switch it with `POST /dashboard/on` and `POST /dashboard/off`, for example:
+
+```yaml
+rest_command:
+  frame_dashboard_on:
+    url: http://<pi-address>:8080/dashboard/on
+    method: post
+  frame_dashboard_off:
+    url: http://<pi-address>:8080/dashboard/off
+    method: post
+```
+
 ## Stack
 
 - Go, cross-compiled for ARMv6 (`GOARM=6`) into a single static binary

@@ -42,6 +42,13 @@
       </label>
       <footer><button type="submit">Save</button></footer>
     </form>
+    <form class="card dashboard" action="/dashboard" method="post">
+      <header><h2>Home Assistant</h2><p class="hint">Shows a dashboard picture instead of the Slideshow, e.g. from the Puppet add-on.</p></header>
+      <label class="field"><span>Show the dashboard</span><input class="switch" type="checkbox" role="switch" name="on" value="true"{{if .Dash.On}} checked{{end}}></label>
+      <label class="field"><span>Picture URL</span><input type="url" name="url" value="{{.Dash.URL}}" placeholder="http://homeassistant.local:10000/lovelace/0?viewport=1872x1404"></label>
+      <label class="field"><span>Refresh every</span><span class="unit"><input type="number" name="interval" min="1" max="1440" value="{{.DashMins}}" required> min</span></label>
+      <footer><button type="submit">Save</button></footer>
+    </form>
     <form class="card tags" action="/tags" method="post">
       <header><h2>Location tags</h2><p class="hint">Writes where a photo was taken onto its Slide.</p></header>
       <label class="field"><span>Show tags</span><input class="switch" type="checkbox" role="switch" name="on" value="true"{{if .Tag.On}} checked{{end}}></label>

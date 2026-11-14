@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/flotti97/e-ink_frame/dashboard"
 	"github.com/flotti97/e-ink_frame/internal/atomicfile"
 	"github.com/flotti97/e-ink_frame/tag"
 )
@@ -16,15 +17,17 @@ import (
 //
 //	{"interval": "45m", "library": "data", "state": "data/shuffle.json", "listen": ":8080", "vcom": -1.58,
 //	 "clock": true, "clock_step": 20, "clock_style": "ink",
-//	 "tag": true, "tag_auto": true, "tag_position": "top-left", "tag_font": "caveat", "tag_size": 64}
+//	 "tag": true, "tag_auto": true, "tag_position": "top-left", "tag_font": "caveat", "tag_size": 64,
+//	 "dashboard": false, "dashboard_url": "http://homeassistant.local:10000/lovelace/0?viewport=1872x1404", "dashboard_interval": "5m"}
 type Config struct {
-	Interval time.Duration // time between Slides
-	Library  string        // Image library directory
-	State    string        // where the Shuffle is saved
-	Listen   string        // address of the upload page
-	VCOM     float64       // panel VCOM in volts, from its flex cable; 0 means unset
-	Clock    ClockSettings // how the time is written on every Slide
-	Tag      tag.Settings  // how locations are written on Slides
+	Interval  time.Duration      // time between Slides
+	Library   string             // Image library directory
+	State     string             // where the Shuffle is saved
+	Listen    string             // address of the upload page
+	VCOM      float64            // panel VCOM in volts, from its flex cable; 0 means unset
+	Clock     ClockSettings      // how the time is written on every Slide
+	Tag       tag.Settings       // how locations are written on Slides
+	Dashboard dashboard.Settings // a Home Assistant dashboard shown instead of Slides
 }
 
 // Clock styles.
@@ -59,12 +62,13 @@ func (c ClockSettings) Validate() error {
 
 // DefaultConfig is used for anything the config file leaves out.
 var DefaultConfig = Config{
-	Interval: 45 * time.Minute,
-	Library:  "data",
-	State:    "data/shuffle.json",
-	Listen:   ":8080",
-	Clock:    ClockSettings{On: true, Step: 20, Style: StyleInk},
-	Tag:      tag.Default,
+	Interval:  45 * time.Minute,
+	Library:   "data",
+	State:     "data/shuffle.json",
+	Listen:    ":8080",
+	Clock:     ClockSettings{On: true, Step: 20, Style: StyleInk},
+	Tag:       tag.Default,
+	Dashboard: dashboard.Default,
 }
 
 // LoadConfig reads the config file at path. A missing file gives DefaultConfig.
@@ -92,6 +96,9 @@ func LoadConfig(path string) (Config, error) {
 		TagPos   *string  `json:"tag_position"`
 		TagFont  *string  `json:"tag_font"`
 		TagSize  *int     `json:"tag_size"`
+		Dash     *bool    `json:"dashboard"`
+		DashURL  *string  `json:"dashboard_url"`
+		DashIntv *string  `json:"dashboard_interval"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -144,6 +151,22 @@ func LoadConfig(path string) (Config, error) {
 	if raw.TagSize != nil {
 		c.Tag.Size = *raw.TagSize
 	}
+	if raw.Dash != nil {
+		c.Dashboard.On = *raw.Dash
+	}
+	if raw.DashURL != nil {
+		c.Dashboard.URL = *raw.DashURL
+	}
+	if raw.DashIntv != nil {
+		d, err := time.ParseDuration(*raw.DashIntv)
+		if err != nil {
+			return c, fmt.Errorf("%s: dashboard_interval: %w", path, err)
+		}
+		c.Dashboard.Interval = d
+	}
+	if err := c.Dashboard.Validate(); err != nil {
+		return c, fmt.Errorf("%s: %w", path, err)
+	}
 	if err := c.Clock.Validate(); err != nil {
 		return c, fmt.Errorf("%s: %w", path, err)
 	}
@@ -163,6 +186,12 @@ func SaveClock(path string, c ClockSettings) error {
 // other settings. A missing file is created.
 func SaveTag(path string, t tag.Settings) error {
 	return save(path, map[string]any{"tag": t.On, "tag_auto": t.Auto, "tag_position": t.Position, "tag_font": t.Font, "tag_size": t.Size})
+}
+
+// SaveDashboard sets the dashboard settings in the config file at path,
+// keeping its other settings. A missing file is created.
+func SaveDashboard(path string, d dashboard.Settings) error {
+	return save(path, map[string]any{"dashboard": d.On, "dashboard_url": d.URL, "dashboard_interval": d.Interval.String()})
 }
 
 // save sets these keys in the config file at path, keeping the others.

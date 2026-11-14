@@ -1,5 +1,5 @@
 // Package web serves the upload page: a gallery of the stored Images with an
-// upload form, the Clock's settings, and on each Image a "show now" and a
+// upload form, the Clock's and Dashboard's settings, and on each Image a "show now" and a
 // delete button. The Slide on the panel is highlighted.
 package web
 
@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/flotti97/e-ink_frame/dashboard"
 	"github.com/flotti97/e-ink_frame/geotag"
 	"github.com/flotti97/e-ink_frame/library"
 	"github.com/flotti97/e-ink_frame/slideshow"
@@ -59,6 +60,8 @@ type Slideshow interface {
 	Retag(id string) error
 	TagSettings() tag.Settings
 	SetTag(t tag.Settings) error
+	DashboardSettings() dashboard.Settings
+	SetDashboard(d dashboard.Settings) error
 }
 
 // Locate names the place at a GPS position, such as geotag.Nominatim.Locate.
@@ -83,6 +86,8 @@ func New(lib *library.Library, show Slideshow, locate Locate) http.Handler {
 	mux.HandleFunc("POST /clock", s.setClock)
 	mux.HandleFunc("POST /location/{id}", s.setLocation)
 	mux.HandleFunc("POST /tags", s.setTags)
+	mux.HandleFunc("POST /dashboard", s.setDashboard)
+	mux.HandleFunc("POST /dashboard/{state}", s.switchDashboard)
 	mux.HandleFunc("POST /tags/auto", s.autoTagAll)
 	mux.HandleFunc("GET /fonts/{file}", s.font)
 	mux.HandleFunc("GET /slides/{file}", s.slide)
@@ -256,6 +261,47 @@ func (s *server) retag(id string) {
 	}
 }
 
+func (s *server) setDashboard(w http.ResponseWriter, r *http.Request) {
+	mins, err := strconv.Atoi(r.FormValue("interval"))
+	if err != nil {
+		s.render(w, http.StatusBadRequest, []string{"Dashboard interval must be a whole number of minutes."})
+		return
+	}
+	d := dashboard.Settings{
+		On: r.FormValue("on") == "true", URL: strings.TrimSpace(r.FormValue("url")),
+		Interval: time.Duration(mins) * time.Minute,
+	}
+	if err := d.Validate(); err != nil {
+		s.render(w, http.StatusBadRequest, []string{"Dashboard settings not saved: " + err.Error()})
+		return
+	}
+	if err := s.show.SetDashboard(d); err != nil {
+		s.render(w, http.StatusInternalServerError, []string{"Saving the dashboard settings failed: " + err.Error()})
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// switchDashboard turns the Dashboard "on" or "off", keeping its other
+// settings, for automations such as a Home Assistant rest_command.
+func (s *server) switchDashboard(w http.ResponseWriter, r *http.Request) {
+	d := s.show.DashboardSettings()
+	switch r.PathValue("state") {
+	case "on":
+		d.On = true
+	case "off":
+		d.On = false
+	default:
+		http.Error(w, "want /dashboard/on or /dashboard/off", http.StatusNotFound)
+		return
+	}
+	if err := s.show.SetDashboard(d); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *server) setTags(w http.ResponseWriter, r *http.Request) {
 	size, err := strconv.Atoi(r.FormValue("size"))
 	if err != nil {
@@ -381,8 +427,11 @@ func (s *server) render(w http.ResponseWriter, status int, problems []string) {
 		MinSize  int
 		MaxSize  int
 		Tagging  bool
+		Dash     dashboard.Settings
+		DashMins int
 	}{problems, entries, s.show.Current(), s.show.ClockSettings(), slideshow.MinClockStep, slideshow.MaxClockStep, maxLocation,
-		s.show.TagSettings(), tag.Fonts, tag.Positions, tag.MinSize, tag.MaxSize, s.tagging.Load()}); err != nil {
+		s.show.TagSettings(), tag.Fonts, tag.Positions, tag.MinSize, tag.MaxSize, s.tagging.Load(),
+		s.show.DashboardSettings(), int(s.show.DashboardSettings().Interval / time.Minute)}); err != nil {
 		log.Printf("web: rendering page: %v", err)
 	}
 }

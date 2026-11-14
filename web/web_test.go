@@ -17,7 +17,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/flotti97/e-ink_frame/dashboard"
 	"github.com/flotti97/e-ink_frame/library"
 	"github.com/flotti97/e-ink_frame/slide"
 	"github.com/flotti97/e-ink_frame/slideshow"
@@ -33,6 +35,17 @@ type fakeSlideshow struct {
 	clockErr error
 	tag      tag.Settings
 	retagged chan string
+	dash     dashboard.Settings
+}
+
+func (f *fakeSlideshow) DashboardSettings() dashboard.Settings { return f.dash }
+
+func (f *fakeSlideshow) SetDashboard(d dashboard.Settings) error {
+	if err := d.Validate(); err != nil {
+		return err
+	}
+	f.dash = d
+	return nil
 }
 
 func (f *fakeSlideshow) Retag(id string) error {
@@ -504,5 +517,40 @@ func TestUploadsAreTaggedFromTheirGPSPosition(t *testing.T) {
 	entries, _ := lib.List()
 	if len(entries) != 1 || entries[0].ID != id || entries[0].Location != "Nowhere" {
 		t.Fatalf("entries %+v", entries)
+	}
+}
+
+func TestDashboardSettingsAreShownAndSaved(t *testing.T) {
+	_, show, h := newServerWithSlideshow(t)
+	show.dash = dashboard.Default
+	if rec := postForm(h, "/dashboard", "on=true&url=http%3A%2F%2Fha.local%3A10000%2Flovelace%2F0&interval=10"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("saving answered %d", rec.Code)
+	}
+	want := dashboard.Settings{On: true, URL: "http://ha.local:10000/lovelace/0", Interval: 10 * time.Minute}
+	if show.dash != want {
+		t.Errorf("dashboard = %+v, want %+v", show.dash, want)
+	}
+	page := get(h, "/").Body.String()
+	for _, w := range []string{`action="/dashboard"`, `value="http://ha.local:10000/lovelace/0"`, `name="interval" min="1" max="1440" value="10"`} {
+		if !strings.Contains(page, w) {
+			t.Errorf("page lacks %s", w)
+		}
+	}
+	if rec := postForm(h, "/dashboard", "on=true&url=&interval=10"); rec.Code != http.StatusBadRequest {
+		t.Errorf("no URL answered %d", rec.Code)
+	}
+}
+
+func TestDashboardSwitchesOnAndOff(t *testing.T) {
+	_, show, h := newServerWithSlideshow(t)
+	show.dash = dashboard.Settings{URL: "http://ha.local/x.png", Interval: time.Minute}
+	if rec := postForm(h, "/dashboard/on", ""); rec.Code != http.StatusNoContent || !show.dash.On {
+		t.Errorf("on answered %d, dashboard %+v", rec.Code, show.dash)
+	}
+	if rec := postForm(h, "/dashboard/off", ""); rec.Code != http.StatusNoContent || show.dash.On {
+		t.Errorf("off answered %d, dashboard %+v", rec.Code, show.dash)
+	}
+	if rec := postForm(h, "/dashboard/maybe", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("maybe answered %d", rec.Code)
 	}
 }
