@@ -328,3 +328,42 @@ func TestSetLocation(t *testing.T) {
 		t.Fatalf("unknown ID: %v", err)
 	}
 }
+
+func TestSetBrightnessRerendersBrighterSlide(t *testing.T) {
+	l := open(t)
+	e, err := l.Add("a.png", bytes.NewReader(pngBytes(t, 0x40)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mean := func() int {
+		f, err := os.Open(l.SlidePath(e.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		img, err := png.Decode(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := img.(*image.Gray)
+		sum := 0
+		for _, v := range g.Pix {
+			sum += int(v)
+		}
+		return sum / len(g.Pix)
+	}
+	before := mean()
+	if err := l.SetBrightness(e.ID, 60); err != nil {
+		t.Fatal(err)
+	}
+	if after := mean(); after <= before+30 {
+		t.Errorf("mean gray %d -> %d, want clearly brighter", before, after)
+	}
+	got, _ := l.List()
+	if got[0].Brightness != 60 {
+		t.Errorf("brightness = %d", got[0].Brightness)
+	}
+	if err := l.SetBrightness(e.ID, 500); err == nil {
+		t.Error("out of range brightness accepted")
+	}
+}

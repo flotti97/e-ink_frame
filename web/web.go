@@ -19,12 +19,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/flotti97/e-ink_frame/dashboard"
 	"github.com/flotti97/e-ink_frame/geotag"
 	"github.com/flotti97/e-ink_frame/library"
+	"github.com/flotti97/e-ink_frame/slide"
 	"github.com/flotti97/e-ink_frame/slideshow"
 	"github.com/flotti97/e-ink_frame/tag"
 )
@@ -72,6 +74,8 @@ type server struct {
 	show    Slideshow
 	locate  Locate
 	tagging atomic.Bool // a run of tagAll is going
+	// brightening holds the IDs whose Slide is being rendered again.
+	brightening sync.Map
 }
 
 // New returns the handler for the upload page. Images are tagged with the
@@ -85,6 +89,7 @@ func New(lib *library.Library, show Slideshow, locate Locate) http.Handler {
 	mux.HandleFunc("POST /show/{id}", s.showNow)
 	mux.HandleFunc("POST /clock", s.setClock)
 	mux.HandleFunc("POST /location/{id}", s.setLocation)
+	mux.HandleFunc("POST /brightness/{id}", s.setBrightness)
 	mux.HandleFunc("POST /tags", s.setTags)
 	mux.HandleFunc("POST /dashboard", s.setDashboard)
 	mux.HandleFunc("POST /dashboard/{state}", s.switchDashboard)
@@ -253,6 +258,29 @@ func (s *server) setLocation(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// setBrightness renders the Image's Slide again with a new Brightness, in
+// the background as it takes the Frame a while, and shows it if it is on
+// the panel.
+func (s *server) setBrightness(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	b, err := strconv.Atoi(r.FormValue("brightness"))
+	if err != nil || b < slide.MinBrightness || b > slide.MaxBrightness {
+		s.render(w, http.StatusBadRequest, []string{fmt.Sprintf("Brightness must be a whole number from %d to %d.", slide.MinBrightness, slide.MaxBrightness)})
+		return
+	}
+	if _, busy := s.brightening.LoadOrStore(id, true); !busy {
+		go func() {
+			defer s.brightening.Delete(id)
+			if err := s.lib.SetBrightness(id, b); err != nil {
+				log.Printf("web: brightness of %s: %v", id, err)
+				return
+			}
+			s.retag(id)
+		}()
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 // retag shows the Slide with this ID again if it is on the panel. It waits
 // for a Refresh, so it runs in the background.
 func (s *server) retag(id string) {
@@ -403,6 +431,13 @@ func (s *server) slide(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, s.lib.SlidePath(id))
 }
 
+// busy returns the IDs whose Slide is being rendered again.
+func (s *server) busy() map[string]bool {
+	m := map[string]bool{}
+	s.brightening.Range(func(k, _ any) bool { m[k.(string)] = true; return true })
+	return m
+}
+
 // render writes the whole page, with any errors shown above the gallery, so
 // the page stays usable whatever went wrong.
 func (s *server) render(w http.ResponseWriter, status int, problems []string) {
@@ -414,24 +449,28 @@ func (s *server) render(w http.ResponseWriter, status int, problems []string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := page.Execute(w, struct {
-		Problems []string
-		Entries  []library.Entry
-		Current  string
-		Clock    slideshow.ClockSettings
-		MinStep  int
-		MaxStep  int
-		MaxLoc   int
-		Tag      tag.Settings
-		Fonts    []tag.Font
-		Pos      []string
-		MinSize  int
-		MaxSize  int
-		Tagging  bool
-		Dash     dashboard.Settings
-		DashMins int
+		Problems  []string
+		Entries   []library.Entry
+		Current   string
+		Clock     slideshow.ClockSettings
+		MinStep   int
+		MaxStep   int
+		MaxLoc    int
+		Tag       tag.Settings
+		Fonts     []tag.Font
+		Pos       []string
+		MinSize   int
+		MaxSize   int
+		Tagging   bool
+		Dash      dashboard.Settings
+		DashMins  int
+		MinBright int
+		MaxBright int
+		Busy      map[string]bool
 	}{problems, entries, s.show.Current(), s.show.ClockSettings(), slideshow.MinClockStep, slideshow.MaxClockStep, maxLocation,
 		s.show.TagSettings(), tag.Fonts, tag.Positions, tag.MinSize, tag.MaxSize, s.tagging.Load(),
-		s.show.DashboardSettings(), int(s.show.DashboardSettings().Interval / time.Minute)}); err != nil {
+		s.show.DashboardSettings(), int(s.show.DashboardSettings().Interval / time.Minute),
+		slide.MinBrightness, slide.MaxBrightness, s.busy()}); err != nil {
 		log.Printf("web: rendering page: %v", err)
 	}
 }

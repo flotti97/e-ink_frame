@@ -108,3 +108,11 @@ button.icon svg { width: 17px; height: 17px; }
 .empty { display: grid; place-items: center; padding: 48px 16px; text-align: center; color: var(--muted); border: 1.5px dashed var(--line); border-radius: var(--radius); }
 .tags footer { gap: 8px; }
 .tag-preview { margin: 4px 0 0; padding: 18px 16px; min-height: 2.5em; border-radius: 8px; background: var(--accent); text-align: center; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Brightness, applied by rendering the Slide again on the Frame. */
+.brightness { display: grid; grid-template-columns: 16px minmax(0, 1fr) 2.5em auto; align-items: center; gap: 6px; margin: 2px 0 0; color: var(--muted); }
+.brightness svg { width: 16px; height: 16px; }
+.brightness input { width: 100%; min-width: 0; accent-color: var(--fg); }
+.brightness output { font-size: .8rem; text-align: right; font-variant-numeric: tabular-nums; }
+.brightness button.icon.save { width: 30px; height: 30px; background: transparent; color: var(--muted); border-color: var(--line); }
+.brightness button.icon.save:hover { background: var(--accent); color: var(--fg); }

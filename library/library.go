@@ -41,6 +41,8 @@ type Entry struct {
 	Added time.Time `json:"added"`
 	// Location is where the Image was taken, written onto its Slide; "" for none.
 	Location string `json:"location,omitempty"`
+	// Brightness its Slide was rendered with, see slide.Brighten; 0 for as supplied.
+	Brightness int `json:"brightness,omitempty"`
 }
 
 // Library is a directory of Images and their Slides. It is safe for
@@ -270,6 +272,52 @@ func (l *Library) SetLocation(id, location string) error {
 	e.Location = location
 	meta, err := json.Marshal(e)
 	if err != nil {
+		return err
+	}
+	return atomicfile.Write(l.entryPath(id), meta)
+}
+
+// SetBrightness renders the Slide of the Image with this ID again with the
+// given Brightness. Rendering is slow, so call it in the background.
+func (l *Library) SetBrightness(id string, brightness int) error {
+	if brightness < slide.MinBrightness || brightness > slide.MaxBrightness {
+		return fmt.Errorf("brightness %d out of range (%d..%d)", brightness, slide.MinBrightness, slide.MaxBrightness)
+	}
+	unlock, err := l.lock()
+	if err != nil {
+		return err
+	}
+	e, err := l.get(id)
+	unlock()
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(l.ImagePath(e))
+	if err != nil {
+		return err
+	}
+	img, err := slide.Decode(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	var s bytes.Buffer
+	if err := png.Encode(&s, slide.RenderBright(img, brightness)); err != nil {
+		return err
+	}
+
+	if unlock, err = l.lock(); err != nil {
+		return err
+	}
+	defer unlock()
+	if e, err = l.get(id); err != nil { // deleted or changed meanwhile
+		return err
+	}
+	e.Brightness = brightness
+	meta, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	if err := atomicfile.Write(l.SlidePath(id), s.Bytes()); err != nil {
 		return err
 	}
 	return atomicfile.Write(l.entryPath(id), meta)

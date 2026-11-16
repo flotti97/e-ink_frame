@@ -81,9 +81,15 @@ func CheckImage(data []byte) error {
 
 // Render produces the Slide for img: a Width×Height image in 16 gray levels.
 func Render(img image.Image) *image.Gray {
+	return RenderBright(img, 0)
+}
+
+// RenderBright is Render with the Image's Brightness changed first, see Brighten.
+func RenderBright(img image.Image, brightness int) *image.Gray {
 	crop := Crop(img, Width, Height)
 	scaled := image.NewRGBA(image.Rect(0, 0, Width, Height))
 	draw.CatmullRom.Scale(scaled, scaled.Bounds(), img, crop, draw.Src, nil)
+	Brighten(scaled, brightness)
 	return Tone(scaled)
 }
 
